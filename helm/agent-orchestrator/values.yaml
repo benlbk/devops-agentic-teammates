@@ -49,6 +49,7 @@ podDisruptionBudget:
 env:
   AGENT_AWS_REGION: ap-southeast-1
   AGENT_DYNAMODB_STATE_TABLE: agent-state
+  AGENT_DYNAMODB_AUDIT_TABLE: agent-audit
   AGENT_EVENT_BUS_NAME: devops-agentic-teammates
   AGENT_LOG_LEVEL: INFO
   AGENT_BEDROCK_MODEL_ID: anthropic.claude-sonnet-4-20250514

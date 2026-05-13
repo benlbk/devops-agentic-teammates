@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Any
 
 import structlog
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from shared.config import settings
@@ -194,8 +195,60 @@ async def handle_approval(request: ApprovalRequest) -> dict[str, str]:
 
 # ---- Webhook Handler ----
 
+
+async def execute_agent_task(task: AgentTask) -> None:
+    """Execute an agent workflow in-process (EKS deployment mode)."""
+    try:
+        agent_type = task.agent_type
+        task_type = task.task_type
+        context = task.context
+
+        if agent_type == "code-build" and "pull_request" in task_type:
+            from agents.code_build import code_review_agent
+
+            pr_number = context.get("prNumber")
+            repository = context.get("repository", "")
+            if not pr_number or not repository:
+                logger.warning("Missing PR number or repository for code review")
+                return
+
+            initial_state = {
+                "messages": [],
+                "task": task,
+                "repository": repository,
+                "pr_number": pr_number,
+                "diff": "",
+                "review_comments": [],
+                "review_summary": "",
+                "recommendation": "",
+            }
+            await code_review_agent.ainvoke(initial_state)
+            logger.info("Code review completed", task_id=task.task_id)
+
+        elif agent_type == "plan-collaborate":
+            logger.info("Plan-collaborate task received (no-op for now)", task_id=task.task_id)
+
+        elif agent_type == "test-secure":
+            logger.info("Test-secure task received (no-op for now)", task_id=task.task_id)
+
+        elif agent_type == "release-deploy":
+            logger.info("Release-deploy task received (no-op for now)", task_id=task.task_id)
+
+        else:
+            logger.info("Unknown agent type", agent_type=agent_type, task_id=task.task_id)
+
+    except Exception as e:
+        logger.error("Agent task execution failed", error=str(e), task_id=task.task_id)
+        task.status = TaskStatus.FAILED
+        task.error = str(e)
+        try:
+            await state_manager.update_task(task)
+        except Exception:
+            pass
+
+
 @app.post("/webhooks/github")
-async def github_webhook(request: Request) -> dict[str, str]:
+async def github_webhook(request: Request, background_tasks: BackgroundTasks) -> dict[str, str]:
     """Receive and route GitHub webhook events."""
     event_type = request.headers.get("X-GitHub-Event", "")
     payload = await request.json()
@@ -242,6 +295,9 @@ async def github_webhook(request: Request) -> dict[str, str]:
         task_type=task_type,
         context=task.context,
     )
+
+    # Execute agent in background (in-process for EKS deployment)
+    background_tasks.add_task(execute_agent_task, task)
 
     return {"message": f"Routed to {agent_type} agent"}
 
