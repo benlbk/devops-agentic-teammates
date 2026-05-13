@@ -1,0 +1,6 @@
+apiVersion: v2
+name: target-backend
+description: Target Application — ASP.NET Core Backend
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

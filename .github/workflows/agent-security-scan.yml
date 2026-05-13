@@ -1,0 +1,69 @@
+name: Agent Security Scan
+on:
+  pull_request:
+    types: [opened, synchronize]
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Gitleaks (Secrets)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Run Trivy (Container)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+        continue-on-error: true
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+        if: always()
+
+      - name: Run Checkov (IaC)
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: terraform/
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+          soft_fail: true
+        continue-on-error: true
+
+      - name: Trigger Agent Analysis
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const response = await fetch(process.env.ORCHESTRATOR_URL + '/api/tasks', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.ORCHESTRATOR_TOKEN}` },
+              body: JSON.stringify({
+                taskType: 'security-scan',
+                agentType: 'test-secure',
+                repository: context.repo.owner + '/' + context.repo.repo,
+                inputData: { prNumber: context.payload.pull_request.number }
+              })
+            });
+            core.info(`Security scan task: ${(await response.json()).taskId}`);
+        env:
+          ORCHESTRATOR_URL: ${{ secrets.ORCHESTRATOR_URL }}
+          ORCHESTRATOR_TOKEN: ${{ secrets.ORCHESTRATOR_TOKEN }}

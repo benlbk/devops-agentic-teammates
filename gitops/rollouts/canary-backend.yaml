@@ -1,0 +1,73 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: target-backend-canary
+  namespace: target-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: target-backend
+  template:
+    metadata:
+      labels:
+        app: target-backend
+    spec:
+      containers:
+        - name: backend
+          image: TARGET_BACKEND_IMAGE:TAG
+          ports:
+            - containerPort: 5000
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 5
+  strategy:
+    canary:
+      canaryService: target-backend-canary
+      stableService: target-backend-stable
+      trafficRouting:
+        alb:
+          ingress: target-backend
+          servicePort: 5000
+      steps:
+        - setWeight: 10
+        - pause: { duration: 2m }
+        - setWeight: 30
+        - pause: { duration: 2m }
+        - setWeight: 60
+        - pause: { duration: 5m }
+        - setWeight: 100
+      analysis:
+        templates:
+          - templateName: success-rate
+        startingStep: 1
+        args:
+          - name: service-name
+            value: target-backend
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: success-rate
+  namespace: target-app
+spec:
+  args:
+    - name: service-name
+  metrics:
+    - name: success-rate
+      interval: 60s
+      successCondition: result[0] >= 0.95
+      failureCondition: result[0] < 0.90
+      failureLimit: 3
+      provider:
+        cloudWatch:
+          metricDataQueries:
+            - id: success_rate
+              expression: "METRICS(\"m1\") / METRICS(\"m2\")"

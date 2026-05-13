@@ -1,0 +1,35 @@
+replicaCount: 2
+
+image:
+  repository: 448658572737.dkr.ecr.ap-southeast-1.amazonaws.com/target-backend
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 5000
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+env:
+  ASPNETCORE_ENVIRONMENT: Production
+  ASPNETCORE_URLS: http://+:5000
+
+envFromSecrets:
+  - secretName: target-backend-db
+    keys:
+      - ConnectionStrings__DefaultConnection
+
+nodeSelector: {}

@@ -1,0 +1,41 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: devops-agentic-teammates
+  namespace: argocd
+spec:
+  description: DevOps Agentic Teammates Platform
+  sourceRepos:
+    - https://github.com/benlbk/devops-agentic-teammates.git
+  destinations:
+    - namespace: agents
+      server: https://kubernetes.default.svc
+    - namespace: argocd
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: target-app
+  namespace: argocd
+spec:
+  description: Target Application
+  sourceRepos:
+    - https://github.com/benlbk/devops-agentic-teammates.git
+  destinations:
+    - namespace: target-app
+      server: https://kubernetes.default.svc
+    - namespace: "pr-*"
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

@@ -1,0 +1,40 @@
+replicaCount: 2
+
+image:
+  repository: 448658572737.dkr.ecr.ap-southeast-1.amazonaws.com/target-frontend
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 3000
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: ""
+      paths:
+        - path: /
+          pathType: Prefix
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+env:
+  BACKEND_URL: http://target-backend:5000
+  NEXT_TELEMETRY_DISABLED: "1"
+
+nodeSelector: {}
