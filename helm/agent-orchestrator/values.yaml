@@ -20,11 +20,12 @@ ingress:
   className: nginx
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
   hosts:
     - host: ""
       paths:
-        - path: /orchestrator
-          pathType: Prefix
+        - path: /orchestrator(/|$)(.*)
+          pathType: ImplementationSpecific
 
 resources:
   requests:
@@ -46,18 +47,18 @@ podDisruptionBudget:
   minAvailable: 1
 
 env:
-  AWS_REGION: ap-southeast-1
-  DYNAMODB_TABLE_NAME: agent-state
-  EVENTBRIDGE_BUS_NAME: devops-agentic-teammates
-  LOG_LEVEL: INFO
-  LLM_PROVIDER: bedrock
-  LLM_MODEL: anthropic.claude-sonnet-4-20250514
+  AGENT_AWS_REGION: ap-southeast-1
+  AGENT_DYNAMODB_STATE_TABLE: agent-state
+  AGENT_EVENT_BUS_NAME: devops-agentic-teammates
+  AGENT_LOG_LEVEL: INFO
+  AGENT_BEDROCK_MODEL_ID: anthropic.claude-sonnet-4-20250514
+  AGENT_BEDROCK_REGION: ap-southeast-1
 
 envFromSecrets:
   - secretName: agent-orchestrator-secrets
     keys:
-      - GITHUB_TOKEN
-      - GITHUB_WEBHOOK_SECRET
+      - AGENT_GITHUB_TOKEN
+      - AGENT_GITHUB_WEBHOOK_SECRET
 
 nodeSelector: {}
 
