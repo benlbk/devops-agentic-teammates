@@ -24,3 +24,5 @@ function FeatureCard({ title, description }: { title: string; description: strin
     </div>
   );
 }
+
+// Test change for AI code review
