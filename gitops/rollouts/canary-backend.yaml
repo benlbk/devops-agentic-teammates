@@ -18,6 +18,14 @@ spec:
           image: 448658572737.dkr.ecr.ap-southeast-1.amazonaws.com/target-backend:latest
           ports:
             - containerPort: 5000
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            - name: ASPNETCORE_URLS
+              value: http://+:5000
+          envFrom:
+            - secretRef:
+                name: target-backend-db
           livenessProbe:
             httpGet:
               path: /health
