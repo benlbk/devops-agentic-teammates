@@ -1,0 +1,158 @@
+name: Ephemeral Environment
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+env:
+  AWS_REGION: ap-southeast-1
+  CLUSTER_NAME: mies-eks
+  ECR_REGISTRY: 448658572737.dkr.ecr.ap-southeast-1.amazonaws.com
+
+jobs:
+  deploy:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::448658572737:role/github-actions-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push backend
+        uses: docker/build-push-action@v5
+        with:
+          context: apps/backend
+          push: true
+          tags: ${{ env.ECR_REGISTRY }}/target-backend:pr-${{ github.event.pull_request.number }}
+          cache-from: type=gha,scope=backend-pr
+          cache-to: type=gha,mode=max,scope=backend-pr
+
+      - name: Build & push frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: apps/frontend
+          push: true
+          tags: ${{ env.ECR_REGISTRY }}/target-frontend:pr-${{ github.event.pull_request.number }}
+          cache-from: type=gha,scope=frontend-pr
+          cache-to: type=gha,mode=max,scope=frontend-pr
+
+      - name: Configure kubectl
+        run: aws eks update-kubeconfig --name ${{ env.CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+
+      - name: Deploy ephemeral environment
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          NS="pr-${PR}"
+          
+          # Create namespace
+          kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl label namespace "$NS" ephemeral=true pr-number="$PR" --overwrite
+          kubectl annotate namespace "$NS" expires-at="$(date -u -d '+48 hours' +%Y-%m-%dT%H:%M:%SZ)" --overwrite
+          
+          # Resource quota
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: ResourceQuota
+          metadata:
+            name: resource-quota
+            namespace: $NS
+          spec:
+            hard:
+              requests.cpu: "4"
+              requests.memory: 8Gi
+              pods: "20"
+          EOF
+          
+          # Deploy backend
+          helm upgrade --install backend helm/target-backend \
+            --namespace "$NS" \
+            --set image.repository=${{ env.ECR_REGISTRY }}/target-backend \
+            --set image.tag=pr-${PR} \
+            --set ingress.enabled=true \
+            --set ingress.hosts[0].host="pr-${PR}.devops.13.215.130.82.nip.io" \
+            --set ingress.hosts[0].paths[0].path=/app \
+            --set ingress.hosts[0].paths[0].pathType=Prefix \
+            --wait --timeout 5m
+          
+          # Deploy frontend
+          helm upgrade --install frontend helm/target-frontend \
+            --namespace "$NS" \
+            --set image.repository=${{ env.ECR_REGISTRY }}/target-frontend \
+            --set image.tag=pr-${PR} \
+            --set ingress.enabled=true \
+            --set ingress.hosts[0].host="pr-${PR}.devops.13.215.130.82.nip.io" \
+            --set ingress.hosts[0].paths[0].path=/ \
+            --set ingress.hosts[0].paths[0].pathType=Prefix \
+            --wait --timeout 5m
+
+      - name: Comment PR with environment URL
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request.number;
+            const url = `https://pr-${pr}.devops.13.215.130.82.nip.io`;
+            const body = `## 🚀 Ephemeral Environment Deployed\n\n` +
+              `| Service | URL |\n` +
+              `|---------|-----|\n` +
+              `| Frontend | [${url}](${url}) |\n` +
+              `| Backend | [${url}/app](${url}/app) |\n\n` +
+              `**Namespace:** \`pr-${pr}\`\n` +
+              `**Expires:** 48 hours from now\n\n` +
+              `_This environment will be automatically destroyed when the PR is closed._`;
+            
+            // Find existing comment
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr,
+            });
+            const existing = comments.data.find(c => c.body.includes('Ephemeral Environment'));
+            
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr,
+                body,
+              });
+            }
+
+  cleanup:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::448658572737:role/github-actions-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configure kubectl
+        run: aws eks update-kubeconfig --name ${{ env.CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+
+      - name: Destroy ephemeral environment
+        run: |
+          NS="pr-${{ github.event.pull_request.number }}"
+          helm uninstall backend --namespace "$NS" 2>/dev/null || true
+          helm uninstall frontend --namespace "$NS" 2>/dev/null || true
+          kubectl delete namespace "$NS" --wait=false 2>/dev/null || true
