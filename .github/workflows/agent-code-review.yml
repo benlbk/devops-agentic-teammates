@@ -27,25 +27,12 @@ jobs:
 
       - name: Trigger Agent Review
         if: steps.diff.outputs.diff_size > 0
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const response = await fetch(process.env.ORCHESTRATOR_URL + '/api/tasks', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.ORCHESTRATOR_TOKEN}` },
-              body: JSON.stringify({
-                taskType: 'code-review',
-                agentType: 'code-build',
-                repository: context.repo.owner + '/' + context.repo.repo,
-                inputData: {
-                  prNumber: context.payload.pull_request.number,
-                  baseBranch: context.payload.pull_request.base.ref,
-                  headBranch: context.payload.pull_request.head.ref,
-                }
-              })
-            });
-            const result = await response.json();
-            core.info(`Task created: ${result.taskId}`);
+        run: |
+          RESULT=$(curl -sk -X POST "${ORCHESTRATOR_URL}/api/tasks" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${ORCHESTRATOR_TOKEN}" \
+            -d "{\"taskType\":\"code-review\",\"agentType\":\"code-build\",\"repository\":\"${{ github.repository }}\",\"inputData\":{\"prNumber\":${{ github.event.pull_request.number }},\"baseBranch\":\"${{ github.base_ref }}\",\"headBranch\":\"${{ github.head_ref }}\"}}")
+          echo "Task created: $RESULT"
         env:
           ORCHESTRATOR_URL: ${{ secrets.ORCHESTRATOR_URL }}
           ORCHESTRATOR_TOKEN: ${{ secrets.ORCHESTRATOR_TOKEN }}
