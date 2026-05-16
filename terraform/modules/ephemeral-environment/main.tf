@@ -3,21 +3,54 @@
 # Provisions per-PR full-stack environments with cost guardrails
 # ---------------------------------------------------------------------------------------------------------------------
 
-variable "project_name" { type = string }
-variable "environment" { type = string; default = "ephemeral" }
-variable "pr_number" { type = number }
-variable "cluster_name" { type = string }
-variable "vpc_id" { type = string }
-variable "private_subnet_ids" { type = list(string) }
-variable "db_subnet_group_name" { type = string }
-variable "ecr_frontend_url" { type = string }
-variable "ecr_backend_url" { type = string }
-variable "frontend_image_tag" { type = string }
-variable "backend_image_tag" { type = string }
-variable "base_domain" { type = string; default = "dev.example.com" }
-variable "ttl_hours" { type = number; default = 48 }
-variable "max_cost_per_day" { type = number; default = 50 }
-variable "tags" { type = map(string); default = {} }
+variable "project_name" {
+  type = string
+}
+variable "environment" { type = string
+  default = "ephemeral"
+}
+variable "pr_number" {
+  type = number
+}
+variable "cluster_name" {
+  type = string
+}
+variable "vpc_id" {
+  type = string
+}
+variable "private_subnet_ids" {
+  type = list(string)
+}
+variable "db_subnet_group_name" {
+  type = string
+}
+variable "ecr_frontend_url" {
+  type = string
+}
+variable "ecr_backend_url" {
+  type = string
+}
+variable "frontend_image_tag" {
+  type = string
+}
+variable "backend_image_tag" {
+  type = string
+}
+variable "base_domain" { type = string
+  default = "dev.example.com"
+}
+variable "ttl_hours" {
+  type    = number
+  default = 48
+}
+variable "max_cost_per_day" {
+  type    = number
+  default = 50
+}
+variable "tags" {
+  type    = map(string)
+  default = {}
+}
 
 locals {
   namespace = "pr-${var.pr_number}"

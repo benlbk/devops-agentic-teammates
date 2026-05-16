@@ -3,12 +3,19 @@
 # Custom event bus for agent communication with schema registry
 # ---------------------------------------------------------------------------------------------------------------------
 
-variable "project_name" { type = string }
-variable "environment" { type = string }
-variable "tags" { type = map(string); default = {} }
+variable "project_name" {
+  type = string
+}
+variable "environment" {
+  type = string
+}
+variable "tags" {
+  type    = map(string)
+  default = {}
+}
 
 resource "aws_cloudwatch_event_bus" "agents" {
-  name = "${var.project_name}-${var.environment}"
+  name = var.project_name
   tags = var.tags
 }
 

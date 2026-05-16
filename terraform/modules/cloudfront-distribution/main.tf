@@ -3,12 +3,26 @@
 # CloudFront with S3 origin (static) and EKS ALB origin (SSR/API)
 # ---------------------------------------------------------------------------------------------------------------------
 
-variable "project_name" { type = string }
-variable "environment" { type = string }
-variable "domain_name" { type = string; default = "" }
-variable "acm_certificate_arn" { type = string; default = "" }
-variable "alb_domain_name" { type = string }
-variable "tags" { type = map(string); default = {} }
+variable "project_name" {
+  type = string
+}
+variable "environment" {
+  type = string
+}
+variable "domain_name" { type = string
+  default = ""
+}
+variable "acm_certificate_arn" {
+  type    = string
+  default = ""
+}
+variable "alb_domain_name" {
+  type = string
+}
+variable "tags" {
+  type    = map(string)
+  default = {}
+}
 
 # S3 bucket for static assets
 resource "aws_s3_bucket" "static_assets" {

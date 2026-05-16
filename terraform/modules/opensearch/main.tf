@@ -3,11 +3,22 @@
 # Vector search collection for codebase RAG
 # ---------------------------------------------------------------------------------------------------------------------
 
-variable "project_name" { type = string }
-variable "environment" { type = string }
-variable "tags" { type = map(string); default = {} }
-variable "vpc_id" { type = string }
-variable "private_subnet_ids" { type = list(string) }
+variable "project_name" {
+  type = string
+}
+variable "environment" {
+  type = string
+}
+variable "tags" {
+  type    = map(string)
+  default = {}
+}
+variable "vpc_id" {
+  type = string
+}
+variable "private_subnet_ids" {
+  type = list(string)
+}
 
 resource "aws_opensearchserverless_security_policy" "encryption" {
   name = "${var.project_name}-${var.environment}-enc"

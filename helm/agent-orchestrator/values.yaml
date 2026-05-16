@@ -58,6 +58,7 @@ env:
   AGENT_LOG_LEVEL: INFO
   AGENT_BEDROCK_MODEL_ID: apac.anthropic.claude-3-5-sonnet-20241022-v2:0
   AGENT_BEDROCK_REGION: ap-southeast-1
+  AGENT_OPENSEARCH_ENDPOINT: ""
 
 envFromSecrets:
   - secretName: agent-orchestrator-secrets

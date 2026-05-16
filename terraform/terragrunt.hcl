@@ -40,7 +40,7 @@ remote_state {
   config = {
     encrypt        = true
     bucket         = "devops-agentic-teammates-tfstate-${local.account_id}"
-    key            = "${path_relative_to_include()}/terraform.tfstate"
+    key            = "${replace(path_relative_to_include(), "\\", "/")}/terraform.tfstate"
     region         = local.aws_region
     dynamodb_table = "terraform-locks"
   }

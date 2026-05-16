@@ -3,9 +3,16 @@
 # Creates OIDC-federated IAM roles bound to Kubernetes service accounts
 # ---------------------------------------------------------------------------------------------------------------------
 
-variable "project_name" { type = string }
-variable "environment" { type = string }
-variable "tags" { type = map(string); default = {} }
+variable "project_name" {
+  type = string
+}
+variable "environment" {
+  type = string
+}
+variable "tags" {
+  type    = map(string)
+  default = {}
+}
 
 variable "cluster_oidc_issuer_url" {
   description = "OIDC issuer URL from EKS cluster"
@@ -18,6 +25,7 @@ variable "roles" {
     namespace       = string
     service_account = string
     policy_arns     = list(string)
+    role_name       = optional(string)
   }))
   default = {}
 }
@@ -33,7 +41,7 @@ locals {
 resource "aws_iam_role" "irsa" {
   for_each = var.roles
 
-  name = "${var.project_name}-${var.environment}-${each.key}"
+  name = coalesce(each.value.role_name, "${var.project_name}-${var.environment}-${each.key}")
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"

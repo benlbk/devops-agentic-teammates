@@ -6,4 +6,8 @@ terraform {
   source = "../../../modules/dynamodb"
 }
 
-inputs = {}
+inputs = {
+  state_table_name     = "agent-state"
+  audit_table_name     = "agent-audit"
+  approvals_table_name = "agent-approvals"
+}

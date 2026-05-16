@@ -3,12 +3,40 @@
 # Agent state table with PK/SK design, GSIs, TTL, and PITR
 # ---------------------------------------------------------------------------------------------------------------------
 
-variable "project_name" { type = string }
-variable "environment" { type = string }
-variable "tags" { type = map(string); default = {} }
+variable "project_name" {
+  type = string
+}
+variable "environment" {
+  type = string
+}
+variable "tags" {
+  type    = map(string)
+  default = {}
+}
+
+variable "state_table_name" {
+  type    = string
+  default = ""
+}
+
+variable "audit_table_name" {
+  type    = string
+  default = ""
+}
+
+variable "approvals_table_name" {
+  type    = string
+  default = ""
+}
+
+locals {
+  state_table_name     = var.state_table_name != "" ? var.state_table_name : "${var.project_name}-${var.environment}-agent-state"
+  audit_table_name     = var.audit_table_name != "" ? var.audit_table_name : "${var.project_name}-${var.environment}-audit-log"
+  approvals_table_name = var.approvals_table_name != "" ? var.approvals_table_name : "${var.project_name}-${var.environment}-approvals"
+}
 
 resource "aws_dynamodb_table" "agent_state" {
-  name         = "${var.project_name}-${var.environment}-agent-state"
+  name         = local.state_table_name
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "PK"
   range_key    = "SK"
@@ -75,11 +103,15 @@ resource "aws_dynamodb_table" "agent_state" {
   tags = merge(var.tags, {
     Name = "${var.project_name}-${var.environment}-agent-state"
   })
+
+  lifecycle {
+    ignore_changes = [ttl]
+  }
 }
 
 # Approval requests table
 resource "aws_dynamodb_table" "approvals" {
-  name         = "${var.project_name}-${var.environment}-approvals"
+  name         = local.approvals_table_name
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "PK"
   range_key    = "SK"
@@ -114,7 +146,7 @@ resource "aws_dynamodb_table" "approvals" {
 
 # Audit log table
 resource "aws_dynamodb_table" "audit_log" {
-  name         = "${var.project_name}-${var.environment}-audit-log"
+  name         = local.audit_table_name
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "PK"
   range_key    = "SK"

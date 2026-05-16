@@ -2,9 +2,16 @@
 # ECR MODULE - Container Registries for agent and application images
 # ---------------------------------------------------------------------------------------------------------------------
 
-variable "project_name" { type = string }
-variable "environment" { type = string }
-variable "tags" { type = map(string); default = {} }
+variable "project_name" {
+  type = string
+}
+variable "environment" {
+  type = string
+}
+variable "tags" {
+  type    = map(string)
+  default = {}
+}
 
 variable "repositories" {
   description = "List of ECR repository names to create"
@@ -24,7 +31,7 @@ variable "repositories" {
 
 resource "aws_ecr_repository" "main" {
   for_each             = toset(var.repositories)
-  name                 = "${var.project_name}/${each.value}"
+  name                 = each.value
   image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {

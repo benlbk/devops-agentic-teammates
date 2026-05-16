@@ -2,10 +2,19 @@
 # API GATEWAY MODULE - Agent Control Plane REST API
 # ---------------------------------------------------------------------------------------------------------------------
 
-variable "project_name" { type = string }
-variable "environment" { type = string }
-variable "event_bus_arn" { type = string }
-variable "tags" { type = map(string); default = {} }
+variable "project_name" {
+  type = string
+}
+variable "environment" {
+  type = string
+}
+variable "event_bus_arn" {
+  type = string
+}
+variable "tags" {
+  type    = map(string)
+  default = {}
+}
 
 resource "aws_api_gateway_rest_api" "main" {
   name        = "${var.project_name}-${var.environment}-api"
