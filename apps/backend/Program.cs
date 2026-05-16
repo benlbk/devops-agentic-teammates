@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Serilog;
 using TargetBackend.Data;
 
+// Version: 1.1.0 — Added request timing header
 var builder = WebApplication.CreateBuilder(args);
 
 // --- Logging ---
@@ -38,6 +39,16 @@ builder.Services.AddCors(options =>
 var app = builder.Build();
 
 // --- Middleware ---
+app.Use(async (context, next) =>
+{
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    context.Response.OnStarting(() =>
+    {
+        context.Response.Headers["X-Response-Time"] = $"{sw.ElapsedMilliseconds}ms";
+        return Task.CompletedTask;
+    });
+    await next();
+});
 app.UseSerilogRequestLogging();
 
 if (app.Environment.IsDevelopment())
