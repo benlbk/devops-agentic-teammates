@@ -638,6 +638,98 @@ async def alert_webhook(payload: AlertPayload, background_tasks: BackgroundTasks
     return {"message": f"Alert routed to operate-monitor agent (task_id: {task.task_id})"}
 
 
+# ---- Dependency Management ----
+
+class DependencyCheckRequest(BaseModel):
+    repository: str
+    auto_pr: bool = False
+
+
+@app.post("/api/dependencies/check")
+async def check_dependencies(request: DependencyCheckRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
+    """Trigger dependency vulnerability/update check for a repository."""
+    task = AgentTask(
+        agent_type="code-build",
+        task_type="dependency-check",
+        context={
+            "repository": request.repository,
+            "auto_pr": request.auto_pr,
+        },
+    )
+    await state_manager.create_task(task)
+    background_tasks.add_task(execute_agent_task, task)
+    return {"message": f"Dependency check dispatched (task_id: {task.task_id})"}
+
+
+# ---- Merge Coordinator ----
+
+class MergeRequest(BaseModel):
+    repository: str
+    pr_number: int
+    merge_method: str = "squash"  # squash, merge, rebase
+
+
+@app.post("/api/merge")
+async def merge_pr(request: MergeRequest) -> dict[str, Any]:
+    """Coordinate merging a PR after all checks pass."""
+    from shared.github_client import github_client
+
+    try:
+        repo = github_client._get_repo(request.repository)
+        pr = repo.get_pull(request.pr_number)
+
+        # Validate checks passed
+        if not pr.mergeable:
+            return {"success": False, "error": "PR is not mergeable (conflicts or failing checks)"}
+
+        # Check required reviews
+        reviews = list(pr.get_reviews())
+        approved = any(r.state == "APPROVED" for r in reviews)
+        if not approved:
+            return {"success": False, "error": "PR has not been approved"}
+
+        # Merge
+        result = pr.merge(
+            merge_method=request.merge_method,
+            commit_title=f"{pr.title} (#{pr.number})",
+        )
+
+        if result.merged:
+            logger.info("PR merged", repository=request.repository, pr=request.pr_number)
+            return {"success": True, "sha": result.sha, "message": result.message}
+        else:
+            return {"success": False, "error": result.message}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ---- Runbook Execution ----
+
+class RunbookRequest(BaseModel):
+    runbook_name: str
+    context: dict[str, Any] = {}
+
+
+@app.post("/api/runbooks/execute")
+async def execute_runbook_endpoint(request: RunbookRequest) -> dict[str, Any]:
+    """Execute an automated runbook."""
+    from shared.runbooks import execute_runbook
+    result = await execute_runbook(request.runbook_name, request.context)
+    return result
+
+
+@app.get("/api/runbooks")
+async def list_runbooks() -> dict[str, Any]:
+    """List available runbooks."""
+    from shared.runbooks import RUNBOOK_REGISTRY
+    return {
+        "runbooks": [
+            {"name": name, "description": fn.__doc__ or ""}
+            for name, fn in RUNBOOK_REGISTRY.items()
+        ]
+    }
+
+
 def main() -> None:
     uvicorn.run(
         "orchestrator.main:app",

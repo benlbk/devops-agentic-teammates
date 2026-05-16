@@ -1,0 +1,112 @@
+name: Container & IaC Security Scan
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/*/Dockerfile'
+      - 'agents/Dockerfile'
+      - 'terraform/**'
+  pull_request:
+    paths:
+      - 'apps/*/Dockerfile'
+      - 'agents/Dockerfile'
+      - 'terraform/**'
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+jobs:
+  container-scan:
+    name: Container Image Scan (Trivy)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image:
+          - { context: 'apps/backend', name: 'target-backend' }
+          - { context: 'apps/frontend', name: 'target-frontend' }
+          - { context: 'agents', name: 'agent-orchestrator' }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image for scanning
+        run: |
+          docker build -t ${{ matrix.image.name }}:scan ${{ matrix.image.context }}
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: '${{ matrix.image.name }}:scan'
+          format: 'sarif'
+          output: 'trivy-results-${{ matrix.image.name }}.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results-${{ matrix.image.name }}.sarif'
+          category: 'trivy-${{ matrix.image.name }}'
+
+      - name: Post scan summary to PR
+        if: github.event_name == 'pull_request' && failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `⚠️ **Container scan found vulnerabilities in \`${{ matrix.image.name }}\`**\n\nCritical/High severity issues detected. Please review the Security tab for details.`
+            });
+
+  iac-scan:
+    name: IaC Security Scan (Checkov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform/
+          framework: terraform
+          output_format: cli,sarif
+          output_file_path: console,checkov-results.sarif
+          soft_fail: true
+          skip_check: CKV_AWS_144,CKV_AWS_145,CKV2_AWS_61
+
+      - name: Upload Checkov results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov-results.sarif
+          category: checkov-iac
+
+      - name: Post IaC scan summary to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            try {
+              const sarif = JSON.parse(fs.readFileSync('checkov-results.sarif', 'utf8'));
+              const results = sarif.runs?.[0]?.results || [];
+              const criticals = results.filter(r => r.level === 'error').length;
+              const warnings = results.filter(r => r.level === 'warning').length;
+              
+              if (criticals > 0 || warnings > 0) {
+                github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `🔒 **IaC Security Scan Results**\n\n| Severity | Count |\n|---|---|\n| Critical | ${criticals} |\n| Warning | ${warnings} |\n\nSee the Security tab for details.`
+                });
+              }
+            } catch (e) {
+              console.log('No SARIF results to post');
+            }
