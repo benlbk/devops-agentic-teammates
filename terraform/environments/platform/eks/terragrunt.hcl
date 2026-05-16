@@ -11,8 +11,8 @@ dependency "vpc" {
 }
 
 inputs = {
-  cluster_name       = "devops-agents"
-  cluster_version    = "1.28"
+  cluster_name       = "mies-eks"
+  cluster_version    = "1.31"
   vpc_id             = dependency.vpc.outputs.vpc_id
   private_subnet_ids = dependency.vpc.outputs.private_subnet_ids
 

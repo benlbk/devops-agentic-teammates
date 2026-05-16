@@ -174,6 +174,19 @@ class StateManager:
         )
         return [AgentTask(**item) for item in response.get("Items", [])]
 
+    async def get_all_tasks_recent(self, hours: int = 24) -> list[AgentTask]:
+        """Get all tasks from the last N hours (scan-based, use sparingly)."""
+        cutoff = (
+            datetime.now(timezone.utc)
+            - __import__("datetime").timedelta(hours=hours)
+        ).isoformat()
+        response = self._table.scan(
+            FilterExpression="created_at >= :cutoff",
+            ExpressionAttributeValues={":cutoff": cutoff},
+            Limit=200,
+        )
+        return [AgentTask(**item) for item in response.get("Items", [])]
+
     async def _audit_log(self, event_type: str, task: AgentTask) -> None:
         """Write an audit log entry."""
         try:
