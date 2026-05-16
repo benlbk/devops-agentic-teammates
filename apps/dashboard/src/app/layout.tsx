@@ -29,6 +29,7 @@ export default function RootLayout({
 function Sidebar() {
   const navItems = [
     { href: "/", label: "Overview", icon: "📊" },
+    { href: "/portal", label: "Ops Portal", icon: "⚡" },
     { href: "/dora", label: "DORA Metrics", icon: "📈" },
     { href: "/agents", label: "Agent Activity", icon: "🤖" },
     { href: "/environments", label: "Environments", icon: "🌍" },
