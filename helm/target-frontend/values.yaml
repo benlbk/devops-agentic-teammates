@@ -14,11 +14,15 @@ ingress:
   className: nginx
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /$2
+    cert-manager.io/cluster-issuer: letsencrypt-prod
   hosts:
     - host: ""
       paths:
         - path: /app(/|$)(.*)
           pathType: ImplementationSpecific
+  tls:
+    - secretName: frontend-tls
+      hosts: []
 
 resources:
   requests:
