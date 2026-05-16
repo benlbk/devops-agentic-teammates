@@ -28,13 +28,13 @@ spec:
             {{- end }}
           livenessProbe:
             httpGet:
-              path: /
+              path: /dashboard
               port: http
             initialDelaySeconds: 10
             periodSeconds: 15
           readinessProbe:
             httpGet:
-              path: /
+              path: /dashboard
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10

@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: 448658572737.dkr.ecr.ap-southeast-1.amazonaws.com/dashboard
-  tag: "latest"
+  tag: "portal-202605162247"
   pullPolicy: IfNotPresent
 
 service:
@@ -13,13 +13,12 @@ ingress:
   enabled: true
   className: nginx
   annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /$2
     cert-manager.io/cluster-issuer: letsencrypt-prod
   hosts:
     - host: ""
       paths:
-        - path: /dashboard(/|$)(.*)
-          pathType: ImplementationSpecific
+        - path: /dashboard
+          pathType: Prefix
   tls:
     - secretName: dashboard-tls
       hosts: []
