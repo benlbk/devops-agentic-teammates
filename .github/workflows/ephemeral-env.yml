@@ -37,7 +37,7 @@ jobs:
         with:
           context: apps/backend
           push: true
-          tags: ${{ env.ECR_REGISTRY }}/target-backend:pr-${{ github.event.pull_request.number }}
+          tags: ${{ env.ECR_REGISTRY }}/target-backend:pr-${{ github.event.pull_request.number }}-${{ github.sha }}
           cache-from: type=gha,scope=backend-pr
           cache-to: type=gha,mode=max,scope=backend-pr
 
@@ -46,7 +46,7 @@ jobs:
         with:
           context: apps/frontend
           push: true
-          tags: ${{ env.ECR_REGISTRY }}/target-frontend:pr-${{ github.event.pull_request.number }}
+          tags: ${{ env.ECR_REGISTRY }}/target-frontend:pr-${{ github.event.pull_request.number }}-${{ github.sha }}
           cache-from: type=gha,scope=frontend-pr
           cache-to: type=gha,mode=max,scope=frontend-pr
 
@@ -81,7 +81,7 @@ jobs:
           helm upgrade --install backend helm/target-backend \
             --namespace "$NS" \
             --set image.repository=${{ env.ECR_REGISTRY }}/target-backend \
-            --set image.tag=pr-${PR} \
+            --set image.tag=pr-${PR}-${{ github.sha }} \
             --set ingress.enabled=true \
             --set ingress.hosts[0].host="pr-${PR}.devops.13.215.130.82.nip.io" \
             --set ingress.hosts[0].paths[0].path=/app \
@@ -92,7 +92,7 @@ jobs:
           helm upgrade --install frontend helm/target-frontend \
             --namespace "$NS" \
             --set image.repository=${{ env.ECR_REGISTRY }}/target-frontend \
-            --set image.tag=pr-${PR} \
+            --set image.tag=pr-${PR}-${{ github.sha }} \
             --set ingress.enabled=true \
             --set ingress.hosts[0].host="pr-${PR}.devops.13.215.130.82.nip.io" \
             --set ingress.hosts[0].paths[0].path=/ \
