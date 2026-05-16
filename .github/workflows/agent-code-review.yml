@@ -1,0 +1,38 @@
+name: Agent Code Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "apps/**"
+      - "agents/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR Diff
+        id: diff
+        run: |
+          git diff origin/${{ github.base_ref }}..HEAD > pr.diff
+          echo "diff_size=$(wc -c < pr.diff)" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger Agent Review
+        if: steps.diff.outputs.diff_size > 0
+        run: |
+          RESULT=$(curl -sk -X POST "${ORCHESTRATOR_URL}/api/tasks" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${ORCHESTRATOR_TOKEN}" \
+            -d "{\"taskType\":\"code-review\",\"agentType\":\"code-build\",\"repository\":\"${{ github.repository }}\",\"inputData\":{\"prNumber\":${{ github.event.pull_request.number }},\"baseBranch\":\"${{ github.base_ref }}\",\"headBranch\":\"${{ github.head_ref }}\"}}")
+          echo "Task created: $RESULT"
+        env:
+          ORCHESTRATOR_URL: ${{ secrets.ORCHESTRATOR_URL }}
+          ORCHESTRATOR_TOKEN: ${{ secrets.ORCHESTRATOR_TOKEN }}
