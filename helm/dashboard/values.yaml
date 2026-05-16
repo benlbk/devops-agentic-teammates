@@ -1,0 +1,38 @@
+replicaCount: 1
+
+image:
+  repository: 448658572737.dkr.ecr.ap-southeast-1.amazonaws.com/dashboard
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 3000
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: ""
+      paths:
+        - path: /dashboard(/|$)(.*)
+          pathType: ImplementationSpecific
+  tls:
+    - secretName: dashboard-tls
+      hosts: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 300m
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+
+env: {}
