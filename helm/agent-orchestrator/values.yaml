@@ -21,15 +21,16 @@ ingress:
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: "10m"
     nginx.ingress.kubernetes.io/rewrite-target: /$2
-    cert-manager.io/cluster-issuer: letsencrypt-prod
+    cert-manager.io/cluster-issuer: letsencrypt-staging
   hosts:
-    - host: ""
+    - host: "devops.13.215.130.82.nip.io"
       paths:
         - path: /orchestrator(/|$)(.*)
           pathType: ImplementationSpecific
   tls:
     - secretName: orchestrator-tls
-      hosts: []
+      hosts:
+        - devops.13.215.130.82.nip.io
 
 resources:
   requests:
