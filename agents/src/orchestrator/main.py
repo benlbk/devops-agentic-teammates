@@ -26,6 +26,12 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         environment=settings.environment,
         project=settings.project_name,
     )
+    # Load policies
+    from pathlib import Path
+    policy_path = Path(__file__).parent.parent.parent / "config" / "policies.yaml"
+    if policy_path.exists():
+        policy_engine.load_from_file(policy_path)
+        logger.info("Loaded policies from file", path=str(policy_path))
     yield
     logger.info("Shutting down Agent Orchestrator")
 
