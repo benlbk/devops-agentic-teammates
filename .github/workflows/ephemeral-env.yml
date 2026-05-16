@@ -81,6 +81,11 @@ jobs:
               pods: "20"
           EOF
           
+          # Copy DB secret from target-app namespace
+          kubectl get secret target-backend-db -n target-app -o json \
+            | jq 'del(.metadata.namespace,.metadata.uid,.metadata.resourceVersion,.metadata.creationTimestamp)' \
+            | kubectl apply -n "$NS" -f -
+          
           # Deploy backend
           helm upgrade --install backend helm/target-backend \
             --namespace "$NS" \
