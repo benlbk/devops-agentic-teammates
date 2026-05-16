@@ -3,6 +3,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
 
+concurrency:
+  group: ephemeral-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   id-token: write
   contents: read
