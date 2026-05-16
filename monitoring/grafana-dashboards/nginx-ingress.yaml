@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-nginx
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  nginx-ingress.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 0,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "title": "Request Rate by Service",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "targets": [{"expr": "sum(rate(nginx_ingress_controller_requests[5m])) by (service)", "legendFormat": "{{service}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Error Rate (5xx)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+          "targets": [{"expr": "sum(rate(nginx_ingress_controller_requests{status=~\"5..\"}[5m])) by (service)", "legendFormat": "{{service}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "P99 Latency by Ingress",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [{"expr": "histogram_quantile(0.99, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket[5m])) by (le, ingress))", "legendFormat": "{{ingress}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "s"}}
+        },
+        {
+          "title": "P50 Latency by Ingress",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "targets": [{"expr": "histogram_quantile(0.50, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket[5m])) by (le, ingress))", "legendFormat": "{{ingress}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "s"}}
+        },
+        {
+          "title": "Active Connections",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 16},
+          "targets": [{"expr": "sum(nginx_ingress_controller_nginx_process_connections{state=\"active\"})"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Total Requests/sec",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 6, "y": 16},
+          "targets": [{"expr": "sum(rate(nginx_ingress_controller_requests[5m]))"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "reqps"}}
+        },
+        {
+          "title": "Success Rate (%)",
+          "type": "gauge",
+          "gridPos": {"h": 4, "w": 6, "x": 12, "y": 16},
+          "targets": [{"expr": "sum(rate(nginx_ingress_controller_requests{status!~\"5..\"}[5m])) / sum(rate(nginx_ingress_controller_requests[5m])) * 100"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 95}, {"color": "green", "value": 99}]}}}
+        },
+        {
+          "title": "Bytes In/Out",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 20},
+          "targets": [
+            {"expr": "sum(rate(nginx_ingress_controller_request_size_sum[5m]))", "legendFormat": "Bytes In"},
+            {"expr": "sum(rate(nginx_ingress_controller_response_size_sum[5m]))", "legendFormat": "Bytes Out"}
+          ],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "Bps"}}
+        }
+      ],
+      "schemaVersion": 39,
+      "tags": ["nginx", "ingress"],
+      "templating": {"list": []},
+      "time": {"from": "now-1h", "to": "now"},
+      "title": "NGINX Ingress Controller",
+      "uid": "nginx-ingress"
+    }

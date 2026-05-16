@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-canary-rollouts
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  canary-rollouts.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "panels": [
+        {
+          "title": "Canary Success Rate",
+          "type": "gauge",
+          "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+          "targets": [{"expr": "sum(rate(nginx_ingress_controller_requests{service=\"target-backend-canary\", status!~\"5..\"}[2m])) / sum(rate(nginx_ingress_controller_requests{service=\"target-backend-canary\"}[2m])) * 100", "legendFormat": "Canary"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 90}, {"color": "green", "value": 95}]}}}
+        },
+        {
+          "title": "Stable Success Rate",
+          "type": "gauge",
+          "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+          "targets": [{"expr": "sum(rate(nginx_ingress_controller_requests{service=\"target-backend-stable\", status!~\"5..\"}[2m])) / sum(rate(nginx_ingress_controller_requests{service=\"target-backend-stable\"}[2m])) * 100", "legendFormat": "Stable"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 90}, {"color": "green", "value": 95}]}}}
+        },
+        {
+          "title": "Canary vs Stable Latency (P95)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+          "targets": [
+            {"expr": "histogram_quantile(0.95, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket{service=\"target-backend-canary\"}[5m])) by (le))", "legendFormat": "Canary P95"},
+            {"expr": "histogram_quantile(0.95, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket{service=\"target-backend-stable\"}[5m])) by (le))", "legendFormat": "Stable P95"}
+          ],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "s"}}
+        },
+        {
+          "title": "Request Rate: Canary vs Stable",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [
+            {"expr": "sum(rate(nginx_ingress_controller_requests{service=\"target-backend-canary\"}[5m]))", "legendFormat": "Canary"},
+            {"expr": "sum(rate(nginx_ingress_controller_requests{service=\"target-backend-stable\"}[5m]))", "legendFormat": "Stable"}
+          ],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "reqps"}}
+        },
+        {
+          "title": "Error Rate: Canary vs Stable",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "targets": [
+            {"expr": "sum(rate(nginx_ingress_controller_requests{service=\"target-backend-canary\", status=~\"5..\"}[5m]))", "legendFormat": "Canary 5xx"},
+            {"expr": "sum(rate(nginx_ingress_controller_requests{service=\"target-backend-stable\", status=~\"5..\"}[5m]))", "legendFormat": "Stable 5xx"}
+          ],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Backend Pod CPU",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+          "targets": [{"expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"target-app\", pod=~\"target-backend.*\"}[5m])) by (pod)", "legendFormat": "{{pod}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Backend Pod Memory",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+          "targets": [{"expr": "sum(container_memory_working_set_bytes{namespace=\"target-app\", pod=~\"target-backend.*\"}) by (pod)", "legendFormat": "{{pod}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "bytes"}}
+        }
+      ],
+      "schemaVersion": 39,
+      "tags": ["canary", "rollouts", "argo"],
+      "time": {"from": "now-1h", "to": "now"},
+      "title": "Canary Rollouts",
+      "uid": "canary-rollouts"
+    }

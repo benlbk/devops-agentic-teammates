@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-agent-orchestrator
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  agent-orchestrator.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "panels": [
+        {
+          "title": "Orchestrator Pod CPU Usage",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "targets": [{"expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"agents\", pod=~\"orchestrator.*\"}[5m])) by (pod)", "legendFormat": "{{pod}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Orchestrator Memory Usage",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+          "targets": [{"expr": "sum(container_memory_working_set_bytes{namespace=\"agents\", pod=~\"orchestrator.*\"}) by (pod)", "legendFormat": "{{pod}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "bytes"}}
+        },
+        {
+          "title": "HTTP Request Rate",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [{"expr": "sum(rate(nginx_ingress_controller_requests{service=\"orchestrator-agent-orchestrator\"}[5m])) by (status)", "legendFormat": "HTTP {{status}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Request Latency P95",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "targets": [{"expr": "histogram_quantile(0.95, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket{service=\"orchestrator-agent-orchestrator\"}[5m])) by (le))", "legendFormat": "P95"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "s"}}
+        },
+        {
+          "title": "Pod Count",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 16},
+          "targets": [{"expr": "count(kube_pod_info{namespace=\"agents\", pod=~\"orchestrator.*\"})"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Pod Restarts",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 6, "y": 16},
+          "targets": [{"expr": "sum(kube_pod_container_status_restarts_total{namespace=\"agents\", pod=~\"orchestrator.*\"})"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "HPA Replicas",
+          "type": "timeseries",
+          "gridPos": {"h": 4, "w": 12, "x": 12, "y": 16},
+          "targets": [
+            {"expr": "kube_horizontalpodautoscaler_status_current_replicas{horizontalpodautoscaler=\"orchestrator-agent-orchestrator\"}", "legendFormat": "Current"},
+            {"expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"orchestrator-agent-orchestrator\"}", "legendFormat": "Desired"},
+            {"expr": "kube_horizontalpodautoscaler_spec_max_replicas{horizontalpodautoscaler=\"orchestrator-agent-orchestrator\"}", "legendFormat": "Max"}
+          ],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        }
+      ],
+      "schemaVersion": 39,
+      "tags": ["agents", "orchestrator"],
+      "time": {"from": "now-1h", "to": "now"},
+      "title": "Agent Orchestrator",
+      "uid": "agent-orchestrator"
+    }
