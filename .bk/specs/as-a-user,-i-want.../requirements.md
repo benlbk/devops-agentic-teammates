@@ -4,10 +4,25 @@
 As a user, I want...
 
 ## Components
-[]
+[
+  {
+    "name": "No components specified",
+    "type": "none",
+    "description": "No components were described in the feature request",
+    "dependencies": []
+  }
+]
 
 ## API Contracts
-[]
+[
+  {
+    "method": "none",
+    "path": "none",
+    "description": "No API endpoints were described",
+    "request_body": null,
+    "response_body": null
+  }
+]
 
 ## User Stories
 []
