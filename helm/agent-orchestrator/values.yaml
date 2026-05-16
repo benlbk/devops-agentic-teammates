@@ -52,7 +52,7 @@ env:
   AGENT_DYNAMODB_AUDIT_TABLE: agent-audit
   AGENT_EVENT_BUS_NAME: devops-agentic-teammates
   AGENT_LOG_LEVEL: INFO
-  AGENT_BEDROCK_MODEL_ID: anthropic.claude-sonnet-4-20250514
+  AGENT_BEDROCK_MODEL_ID: apac.anthropic.claude-3-5-sonnet-20241022-v2:0
   AGENT_BEDROCK_REGION: ap-southeast-1
 
 envFromSecrets:

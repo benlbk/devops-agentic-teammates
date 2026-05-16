@@ -159,13 +159,19 @@ async def post_review(state: CodeReviewState) -> dict[str, Any]:
 *Reviewed by DevOps Agentic Teammates — Code & Build Agent*
 """
 
+    # Normalize recommendation to valid GitHub review event
+    valid_events = {"APPROVE", "REQUEST_CHANGES", "COMMENT"}
+    event = state["recommendation"].upper().replace(" ", "_")
+    if event not in valid_events:
+        event = "COMMENT"
+
     try:
         await github_client.create_pr_review(
             owner=owner,
             repo=repo,
             pr_number=state["pr_number"],
             body=review_body,
-            event=state["recommendation"],
+            event=event,
         )
     except Exception as e:
         logger.error("Failed to post review", error=str(e))
