@@ -44,6 +44,44 @@ class GitHubClient:
         token = await self._get_token()
         return {"Authorization": f"Bearer {token}"}
 
+    # ---- Repository Management ----
+
+    async def create_repository(
+        self, name: str, description: str = "", private: bool = False,
+        auto_init: bool = True,
+    ) -> dict[str, Any]:
+        """Create a new GitHub repository under the authenticated user."""
+        headers = await self._auth_headers()
+        payload: dict[str, Any] = {
+            "name": name,
+            "description": description,
+            "private": private,
+            "auto_init": auto_init,
+        }
+        response = await self._http.post(
+            "/user/repos",
+            headers=headers,
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def ensure_repository(
+        self, owner: str, repo: str, description: str = "",
+    ) -> dict[str, Any]:
+        """Get existing repo or create it if it doesn't exist."""
+        headers = await self._auth_headers()
+        response = await self._http.get(
+            f"/repos/{owner}/{repo}",
+            headers=headers,
+        )
+        if response.status_code == 200:
+            return response.json()
+        # Repo doesn't exist, create it
+        return await self.create_repository(
+            name=repo, description=description, auto_init=True,
+        )
+
     # ---- Repository Operations ----
 
     async def get_file_content(
@@ -130,6 +168,17 @@ class GitHubClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_pull_request(
+        self, owner: str, repo: str, pr_number: int,
+    ) -> dict[str, Any]:
+        headers = await self._auth_headers()
+        response = await self._http.get(
+            f"/repos/{owner}/{repo}/pulls/{pr_number}",
+            headers=headers,
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def get_pr_diff(
         self, owner: str, repo: str, pr_number: int,
     ) -> str:
@@ -186,6 +235,36 @@ class GitHubClient:
         return response.json()
 
     # ---- Issue Operations ----
+
+    async def get_issue(
+        self, owner: str, repo: str, issue_number: int,
+    ) -> dict[str, Any]:
+        headers = await self._auth_headers()
+        response = await self._http.get(
+            f"/repos/{owner}/{repo}/issues/{issue_number}",
+            headers=headers,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def list_issues(
+        self, owner: str, repo: str,
+        labels: list[str] | None = None,
+        state: str = "open",
+        per_page: int = 30,
+    ) -> list[dict[str, Any]]:
+        headers = await self._auth_headers()
+        params: dict[str, Any] = {"state": state, "per_page": per_page}
+        if labels:
+            params["labels"] = ",".join(labels)
+
+        response = await self._http.get(
+            f"/repos/{owner}/{repo}/issues",
+            headers=headers,
+            params=params,
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def create_issue(
         self, owner: str, repo: str, title: str, body: str,

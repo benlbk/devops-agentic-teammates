@@ -40,6 +40,7 @@ class CodeGenState(TypedDict):
     repository: str
     spec: dict[str, Any]
     codebase_context: list[dict[str, Any]]
+    spec_files: list[dict[str, str]]
     generated_files: list[dict[str, str]]
     branch_name: str
     pr_url: str
@@ -174,14 +175,24 @@ async def post_review(state: CodeReviewState) -> dict[str, Any]:
             event=event,
         )
     except Exception as e:
-        logger.error("Failed to post review", error=str(e))
-        # Fall back to a comment
-        await github_client.create_issue_comment(
-            owner=owner,
-            repo=repo,
-            issue_number=state["pr_number"],
-            body=review_body,
-        )
+        logger.warning("Failed to post review with event, retrying as COMMENT", review_event=event, error=str(e))
+        # GitHub rejects REQUEST_CHANGES on own PRs — fall back to COMMENT
+        try:
+            await github_client.create_pr_review(
+                owner=owner,
+                repo=repo,
+                pr_number=state["pr_number"],
+                body=review_body,
+                event="COMMENT",
+            )
+        except Exception as e2:
+            logger.error("Failed to post review as comment, using issue comment", error=str(e2))
+            await github_client.create_issue_comment(
+                owner=owner,
+                repo=repo,
+                issue_number=state["pr_number"],
+                body=review_body,
+            )
 
     return {"messages": [HumanMessage(content="Review posted")]}
 
@@ -194,6 +205,7 @@ async def finalize_review(state: CodeReviewState) -> dict[str, Any]:
     task.output_data = {
         "reviewComments": len(state["review_comments"]),
         "recommendation": state["recommendation"],
+        "reviewSummary": state["review_summary"],
         "tokensUsed": llm_provider.tokens_used,
     }
     task.tokens_used = llm_provider.tokens_used
@@ -206,6 +218,19 @@ async def finalize_review(state: CodeReviewState) -> dict[str, Any]:
             "taskType": "generate-tests",
             "context": {"repository": state["repository"], "prNumber": state["pr_number"]},
         })
+    elif state["recommendation"] == "REQUEST_CHANGES":
+        # Auto-chain: trigger code-fix to address review findings
+        next_actions.append({
+            "agent": "code-build",
+            "taskType": "code-generation",
+            "context": {
+                "repository": state["repository"],
+                "fix_mode": True,
+                "fix_pr_number": state["pr_number"],
+                "review_summary": state["review_summary"],
+                "review_task_id": task.task_id,
+            },
+        })
 
     await event_publisher.publish_task_completed(
         agent_type="code-build",
@@ -215,6 +240,32 @@ async def finalize_review(state: CodeReviewState) -> dict[str, Any]:
         output=task.output_data,
         next_actions=next_actions,
     )
+
+    # Execute fix chain immediately if REQUEST_CHANGES
+    if state["recommendation"] == "REQUEST_CHANGES":
+        fix_task = AgentTask(
+            agent_type="code-build",
+            task_type="code-generation",
+            context={
+                "repository": state["repository"],
+                "fix_mode": True,
+                "fix_pr_number": state["pr_number"],
+                "review_summary": state["review_summary"],
+                "review_task_id": task.task_id,
+            },
+        )
+        await state_manager.create_task(fix_task)
+        await event_publisher.publish_task_requested(
+            agent_type="code-build",
+            task_type="code-generation",
+            context=fix_task.context,
+        )
+        import asyncio
+        from orchestrator.main import execute_agent_task
+        asyncio.ensure_future(execute_agent_task(fix_task))
+        logger.info("Chained code-fix task for review findings",
+                    fix_task_id=fix_task.task_id, review_task_id=task.task_id)
+
     return {}
 
 
@@ -251,7 +302,24 @@ async def retrieve_context(state: CodeGenState) -> dict[str, Any]:
     task.started_at = datetime.now(timezone.utc).isoformat()
     await state_manager.update_task(task)
 
-    spec_description = json.dumps(state["spec"])
+    spec = state["spec"]
+    fix_mode = spec.get("fix_mode", False)
+
+    # In fix mode, fetch the PR diff as context so LLM can see current code
+    if fix_mode and spec.get("fix_pr_number"):
+        try:
+            repo_parts = state["repository"].split("/")
+            owner, repo = repo_parts[0], repo_parts[1]
+            diff = await github_client.get_pr_diff(
+                owner=owner, repo=repo, pr_number=int(spec["fix_pr_number"])
+            )
+            # Convert diff into context items
+            context = [{"file_path": "PR_DIFF", "content": diff[:12000]}]
+            return {"codebase_context": context}
+        except Exception as e:
+            logger.warning("Failed to fetch PR diff for fix mode", error=str(e))
+
+    spec_description = json.dumps(spec)
     try:
         context = await rag_pipeline.search(
             query=spec_description[:500],
@@ -264,49 +332,264 @@ async def retrieve_context(state: CodeGenState) -> dict[str, Any]:
     return {"codebase_context": context}
 
 
+SPEC_DRIVEN_PROMPT = """You are a senior software architect following spec-driven development.
+Given a feature specification, generate three markdown documents that will guide implementation:
+
+1. **requirements.md** — Functional & non-functional requirements as user stories:
+   - "As a [user], I want [goal] so that [benefit]"
+   - Acceptance criteria for each story
+   - Constraints and success criteria
+
+2. **design.md** — System architecture & technical design:
+   - Component interactions and data flow
+   - Technology choices and rationale
+   - Security, scalability, error handling considerations
+   - API contracts if applicable
+
+3. **tasks.md** — Actionable implementation tasks:
+   - Ordered by priority and dependency
+   - Include estimates (S/M/L) and completion criteria
+   - Each task should be independently deliverable
+
+Return as JSON array:
+[
+  {"path": ".bk/specs/FEATURE_NAME/requirements.md", "content": "..."},
+  {"path": ".bk/specs/FEATURE_NAME/design.md", "content": "..."},
+  {"path": ".bk/specs/FEATURE_NAME/tasks.md", "content": "..."}
+]
+
+Replace FEATURE_NAME with a kebab-case name derived from the feature.
+Return ONLY valid JSON. No markdown code fences."""
+
+
+async def generate_specs(state: CodeGenState) -> dict[str, Any]:
+    """Generate spec-driven development documents before code generation."""
+    import re
+
+    # Skip spec generation in fix mode (we're fixing existing code, not creating new)
+    if state["spec"].get("fix_mode"):
+        logger.info("Skipping spec generation (fix mode)")
+        return {"spec_files": []}
+
+    spec = state["spec"]
+    feature_name = spec.get("name", "feature").lower().replace(" ", "-")[:30]
+
+    messages = [
+        SystemMessage(content=SPEC_DRIVEN_PROMPT),
+        HumanMessage(content=f"""Generate spec documents for this feature:
+
+Feature: {spec.get('name', 'Unknown')}
+Description: {spec.get('description', '')}
+
+Labels: {spec.get('labels', [])}
+Target Path: {spec.get('target_path', '')}
+Stories: {json.dumps(spec.get('stories', []))}"""),
+    ]
+
+    spec_files = []
+    for attempt in range(2):
+        response = await llm_provider.ainvoke(messages)
+        try:
+            content = response.content
+            if isinstance(content, str):
+                # Strip markdown code fences
+                content = re.sub(r'^```(?:json)?\s*\n?', '', content.strip())
+                content = re.sub(r'\n?```\s*$', '', content.strip())
+                # Try to extract JSON array if surrounded by other text
+                match = re.search(r'\[.*\]', content, re.DOTALL)
+                if match:
+                    content = match.group(0)
+            spec_files = json.loads(content)
+            if isinstance(spec_files, list) and len(spec_files) > 0:
+                break
+            spec_files = []
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning("Failed to parse spec docs", attempt=attempt + 1, error=str(e),
+                           response_preview=str(response.content)[:200] if response else "")
+            spec_files = []
+
+    logger.info("Generated spec documents", count=len(spec_files), feature=feature_name)
+    return {"spec_files": spec_files}
+
+
 async def generate_code(state: CodeGenState) -> dict[str, Any]:
     """Generate code from the spec."""
+    import re
+
     spec = state["spec"]
+    fix_mode = spec.get("fix_mode", False)
     context_str = "\n\n".join(
         f"// {c['file_path']}\n{c['content']}" for c in state["codebase_context"]
     )
 
-    # Determine which stack to generate for
-    spec_type = spec.get("type", "frontend")
-    system_prompt = NEXTJS_SYSTEM_PROMPT if spec_type == "frontend" else DOTNET_SYSTEM_PROMPT
+    if fix_mode:
+        # Fix mode: generate fixes based on review findings
+        review_summary = spec.get("review_summary", "")
+        system_prompt = """You are an expert developer fixing code review findings.
+Given the review feedback and existing code context, generate FIXED versions of the files.
+Focus on addressing the specific issues raised in the review.
+Only include files that need changes — provide the complete corrected file content.
 
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=f"""Generate code for the following specification:
+Return ONLY a JSON array of file objects: [{"path": "src/...", "content": "complete file content"}]
+Do not wrap in markdown code fences."""
+
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=f"""Review Findings to Fix:
+{review_summary}
+
+Existing code context:
+{context_str[:8000]}
+
+Generate the fixed files addressing all review findings. Return ONLY valid JSON array."""),
+        ]
+    else:
+        # Normal mode: generate new code from spec
+        # Include spec documents as additional context for code generation
+        specs_context = ""
+        for sf in state.get("spec_files", []):
+            specs_context += f"\n\n--- {sf['path']} ---\n{sf['content']}"
+
+        # Determine which stack to generate for
+        spec_type = spec.get("type", "frontend")
+        target_path = spec.get("target_path", "")
+        system_prompt = NEXTJS_SYSTEM_PROMPT if spec_type == "frontend" else DOTNET_SYSTEM_PROMPT
+
+        # Add target path guidance if provided
+        path_hint = f"\nPlace files under: {target_path}/" if target_path else ""
+
+        messages = [
+            SystemMessage(content=system_prompt + path_hint),
+            HumanMessage(content=f"""Generate code for the following specification:
 
 {json.dumps(spec, indent=2)}
 
+Spec-driven design documents (follow these closely):
+{specs_context[:4000]}
+
 Existing codebase context for reference:
-{context_str[:5000]}"""),
-    ]
+{context_str[:5000]}
+
+Return ONLY a JSON array of file objects. Do not wrap in markdown code fences."""),
+        ]
 
     response = await llm_provider.ainvoke(messages)
     try:
-        files = json.loads(response.content.strip("```json").strip("```"))
-    except json.JSONDecodeError:
-        files = []
+        content = response.content
+        # Handle list content blocks (Claude Bedrock format)
+        if isinstance(content, list):
+            content = "".join(
+                block.get("text", "") if isinstance(block, dict) else str(block)
+                for block in content
+            )
+        if isinstance(content, str):
+            # Strip markdown code fences
+            content = re.sub(r'^```(?:json)?\s*\n?', '', content.strip())
+            content = re.sub(r'\n?```\s*$', '', content.strip())
+            # Fix invalid JSON escapes (e.g. \d, \w from regex in code)
+            content = re.sub(
+                r'\\([^"\\/bfnrtu])',
+                r'\\\\\\1',
+                content,
+            )
+        files = json.loads(content, strict=False)
+        if not isinstance(files, list):
+            files = []
+    except (json.JSONDecodeError, TypeError) as parse_err:
+        logger.warning("JSON parse error", error=str(parse_err)[:200])
+        # Try regex extraction of JSON array from raw content
+        raw = response.content
+        if isinstance(raw, list):
+            raw = "".join(
+                block.get("text", "") if isinstance(block, dict) else str(block)
+                for block in raw
+            )
+        try:
+            # Fix invalid escapes in fallback too
+            fixed = re.sub(r'\\([^"\\/bfnrtu])', r'\\\\\\1', raw)
+            match = re.search(r'\[[\s\S]*\]', fixed)
+            if match:
+                files = json.loads(match.group(0), strict=False)
+            else:
+                files = []
+        except (json.JSONDecodeError, TypeError):
+            files = []
+        if not files:
+            logger.warning("Failed to parse generated code from LLM",
+                           response_preview=repr(raw[:500]) if isinstance(raw, str) else repr(str(raw)[:500]))
 
     return {"generated_files": files}
 
 
 async def create_pr(state: CodeGenState) -> dict[str, Any]:
-    """Create a branch, commit files, and open a PR."""
+    """Create a branch, commit spec files + generated code, and open a PR."""
     repo_parts = state["repository"].split("/")
     if len(repo_parts) != 2:
         return {"pr_url": ""}
 
     owner, repo = repo_parts
-    spec_name = state["spec"].get("name", "feature")
+    spec = state["spec"]
+    fix_mode = spec.get("fix_mode", False)
+
+    # In fix mode, push to existing PR branch
+    if fix_mode and state.get("branch_name"):
+        branch = state["branch_name"]
+        try:
+            for file_info in state["generated_files"]:
+                await github_client.create_or_update_file(
+                    owner=owner,
+                    repo=repo,
+                    path=file_info["path"],
+                    content=file_info["content"],
+                    message=f"fix: address review findings in {file_info['path']}",
+                    branch=branch,
+                )
+            # Post a comment on the PR noting the fix
+            fix_pr_number = spec.get("fix_pr_number")
+            if fix_pr_number:
+                await github_client.create_issue_comment(
+                    owner=owner,
+                    repo=repo,
+                    issue_number=fix_pr_number,
+                    body=f"""## 🔧 Auto-Fix Applied
+
+The Code & Build Agent has pushed fixes to address the review findings:
+
+### Files Updated
+{chr(10).join(f'- `{f["path"]}`' for f in state['generated_files'])}
+
+### Review Findings Addressed
+{spec.get('review_summary', 'N/A')[:500]}
+
+---
+*Fixed by DevOps Agentic Teammates — Code & Build Agent*
+""",
+                )
+            logger.info("Pushed fixes to existing branch", branch=branch, files=len(state["generated_files"]))
+            return {"pr_url": f"https://github.com/{owner}/{repo}/pull/{fix_pr_number}", "branch_name": branch}
+        except Exception as e:
+            logger.error("Failed to push fixes", error=str(e))
+            return {"pr_url": "", "branch_name": branch}
+
+    # Normal mode: create new branch and PR
+    spec_name = spec.get("name", "feature")
     branch = f"agent/{spec_name.lower().replace(' ', '-')}"
 
     try:
         await github_client.create_branch(owner=owner, repo=repo, branch=branch)
 
+        # Commit spec documents first (spec-driven development)
+        for spec_file in state.get("spec_files", []):
+            await github_client.create_or_update_file(
+                owner=owner,
+                repo=repo,
+                path=spec_file["path"],
+                content=spec_file["content"],
+                message=f"docs: add spec {spec_file['path']}",
+                branch=branch,
+            )
+
+        # Then commit implementation code
         for file_info in state["generated_files"]:
             await github_client.create_or_update_file(
                 owner=owner,
@@ -317,16 +600,20 @@ async def create_pr(state: CodeGenState) -> dict[str, Any]:
                 branch=branch,
             )
 
+        all_files = state.get("spec_files", []) + state["generated_files"]
         pr = await github_client.create_pull_request(
             owner=owner,
             repo=repo,
             title=f"feat: {spec_name}",
-            body=f"""## Generated by Code & Build Agent
+            body=f"""## Generated by Code & Build Agent (Spec-Driven)
 
 ### Specification
 {json.dumps(state['spec'], indent=2)[:2000]}
 
-### Files Generated
+### Spec Documents
+{chr(10).join(f'- `{f["path"]}`' for f in state.get('spec_files', []))}
+
+### Implementation Files
 {chr(10).join(f'- `{f["path"]}`' for f in state['generated_files'])}
 
 ---
@@ -383,12 +670,14 @@ def build_review_graph() -> StateGraph:
 def build_codegen_graph() -> StateGraph:
     graph = StateGraph(CodeGenState)
     graph.add_node("retrieve_context", retrieve_context)
+    graph.add_node("generate_specs", generate_specs)
     graph.add_node("generate_code", generate_code)
     graph.add_node("create_pr", create_pr)
     graph.add_node("finalize", finalize_codegen)
 
     graph.add_edge(START, "retrieve_context")
-    graph.add_edge("retrieve_context", "generate_code")
+    graph.add_edge("retrieve_context", "generate_specs")
+    graph.add_edge("generate_specs", "generate_code")
     graph.add_edge("generate_code", "create_pr")
     graph.add_edge("create_pr", "finalize")
     graph.add_edge("finalize", END)
