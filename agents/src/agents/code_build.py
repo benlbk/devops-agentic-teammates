@@ -241,30 +241,51 @@ async def finalize_review(state: CodeReviewState) -> dict[str, Any]:
         next_actions=next_actions,
     )
 
-    # Execute fix chain immediately if REQUEST_CHANGES
+    # Execute fix chain immediately if REQUEST_CHANGES — but only if not already fixed
     if state["recommendation"] == "REQUEST_CHANGES":
-        fix_task = AgentTask(
-            agent_type="code-build",
-            task_type="code-generation",
-            context={
-                "repository": state["repository"],
-                "fix_mode": True,
-                "fix_pr_number": state["pr_number"],
-                "review_summary": state["review_summary"],
-                "review_task_id": task.task_id,
-            },
-        )
-        await state_manager.create_task(fix_task)
-        await event_publisher.publish_task_requested(
-            agent_type="code-build",
-            task_type="code-generation",
-            context=fix_task.context,
-        )
-        import asyncio
-        from orchestrator.main import execute_agent_task
-        asyncio.ensure_future(execute_agent_task(fix_task))
-        logger.info("Chained code-fix task for review findings",
-                    fix_task_id=fix_task.task_id, review_task_id=task.task_id)
+        # Loop prevention: check if latest commit on PR is already an auto-fix
+        should_fix = True
+        try:
+            repo_parts = state["repository"].split("/")
+            owner, repo = repo_parts[0], repo_parts[1]
+            pr_data = await github_client.get_pull_request(
+                owner=owner, repo=repo, pr_number=int(state["pr_number"])
+            )
+            branch = pr_data.get("head", {}).get("ref", "")
+            if branch:
+                commits = await github_client.list_commits(
+                    owner=owner, repo=repo, branch=branch, per_page=1
+                )
+                if commits and commits[0].get("commit", {}).get("message", "").startswith("fix: address review findings"):
+                    should_fix = False
+                    logger.info("Skipping auto-fix: latest commit is already a fix",
+                                branch=branch, pr=state["pr_number"])
+        except Exception as e:
+            logger.warning("Failed to check latest commit for loop prevention", error=str(e))
+
+        if should_fix:
+            fix_task = AgentTask(
+                agent_type="code-build",
+                task_type="code-generation",
+                context={
+                    "repository": state["repository"],
+                    "fix_mode": True,
+                    "fix_pr_number": state["pr_number"],
+                    "review_summary": state["review_summary"],
+                    "review_task_id": task.task_id,
+                },
+            )
+            await state_manager.create_task(fix_task)
+            await event_publisher.publish_task_requested(
+                agent_type="code-build",
+                task_type="code-generation",
+                context=fix_task.context,
+            )
+            import asyncio
+            from orchestrator.main import execute_agent_task
+            asyncio.ensure_future(execute_agent_task(fix_task))
+            logger.info("Chained code-fix task for review findings",
+                        fix_task_id=fix_task.task_id, review_task_id=task.task_id)
 
     return {}
 

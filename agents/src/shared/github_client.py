@@ -179,6 +179,19 @@ class GitHubClient:
         response.raise_for_status()
         return response.json()
 
+    async def list_commits(
+        self, owner: str, repo: str, branch: str, per_page: int = 1,
+    ) -> list[dict[str, Any]]:
+        """List commits on a branch (most recent first)."""
+        headers = await self._auth_headers()
+        response = await self._http.get(
+            f"/repos/{owner}/{repo}/commits",
+            headers=headers,
+            params={"sha": branch, "per_page": per_page},
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def get_pr_diff(
         self, owner: str, repo: str, pr_number: int,
     ) -> str:
