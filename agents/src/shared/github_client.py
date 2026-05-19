@@ -192,6 +192,23 @@ class GitHubClient:
         response.raise_for_status()
         return response.json()
 
+    async def merge_pull_request(
+        self, owner: str, repo: str, pr_number: int,
+        merge_method: str = "squash", commit_title: str = "",
+    ) -> dict[str, Any]:
+        """Merge a pull request."""
+        headers = await self._auth_headers()
+        body: dict[str, Any] = {"merge_method": merge_method}
+        if commit_title:
+            body["commit_title"] = commit_title
+        response = await self._http.put(
+            f"/repos/{owner}/{repo}/pulls/{pr_number}/merge",
+            headers=headers,
+            json=body,
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def get_pr_diff(
         self, owner: str, repo: str, pr_number: int,
     ) -> str:

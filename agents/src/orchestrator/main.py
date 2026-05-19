@@ -1035,30 +1035,28 @@ async def merge_pr(request: MergeRequest) -> dict[str, Any]:
     from shared.github_client import github_client
 
     try:
-        repo = github_client._get_repo(request.repository)
-        pr = repo.get_pull(request.pr_number)
+        owner, repo = request.repository.split("/")
 
-        # Validate checks passed
-        if not pr.mergeable:
-            return {"success": False, "error": "PR is not mergeable (conflicts or failing checks)"}
-
-        # Check required reviews
-        reviews = list(pr.get_reviews())
-        approved = any(r.state == "APPROVED" for r in reviews)
-        if not approved:
-            return {"success": False, "error": "PR has not been approved"}
-
-        # Merge
-        result = pr.merge(
-            merge_method=request.merge_method,
-            commit_title=f"{pr.title} (#{pr.number})",
+        # Fetch PR details
+        pr = await github_client.get_pull_request(
+            owner=owner, repo=repo, pr_number=request.pr_number
         )
 
-        if result.merged:
-            logger.info("PR merged", repository=request.repository, pr=request.pr_number)
-            return {"success": True, "sha": result.sha, "message": result.message}
-        else:
-            return {"success": False, "error": result.message}
+        # Validate mergeable
+        if pr.get("mergeable") is False:
+            return {"success": False, "error": "PR is not mergeable (conflicts or failing checks)"}
+
+        # Merge
+        result = await github_client.merge_pull_request(
+            owner=owner,
+            repo=repo,
+            pr_number=request.pr_number,
+            merge_method=request.merge_method,
+            commit_title=f"{pr['title']} (#{pr['number']})",
+        )
+
+        logger.info("PR merged", repository=request.repository, pr=request.pr_number)
+        return {"success": True, "sha": result.get("sha", ""), "message": result.get("message", "Merged")}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
