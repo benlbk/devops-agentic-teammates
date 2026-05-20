@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Annotated
 
@@ -192,21 +193,144 @@ async def finalize_test_gen(state: TestGenState) -> dict[str, Any]:
 # ---- Security Scan Workflow ----
 
 async def run_security_scans(state: SecurityScanState) -> dict[str, Any]:
-    """Orchestrate security scanning tools."""
+    """Run SAST and SCA scans on the PR diff using LLM analysis."""
     task = state["task"]
     task.status = TaskStatus.IN_PROGRESS
     task.started_at = datetime.now(timezone.utc).isoformat()
     await state_manager.update_task(task)
 
-    # In production, these would invoke actual scanning tools via GitHub Actions
-    # Here we define the orchestration logic
+    repo_parts = state["repository"].split("/")
+    if len(repo_parts) != 2:
+        return {"scan_results": {}}
+
+    owner, repo = repo_parts
+    pr_number = state["pr_number"]
+
+    # Fetch PR diff for SAST analysis
+    diff = ""
+    changed_files: list[dict] = []
+    try:
+        diff = await github_client.get_pr_diff(
+            owner=owner, repo=repo, pr_number=int(pr_number)
+        )
+        pr_files = await github_client.list_pr_files(
+            owner=owner, repo=repo, pr_number=int(pr_number)
+        )
+        changed_files = pr_files if isinstance(pr_files, list) else []
+    except Exception as e:
+        logger.warning("Failed to fetch PR diff for security scan", error=str(e))
+
     scan_results: dict[str, Any] = {
-        "sast": {"tool": "CodeQL+Semgrep", "status": "pending", "findings": []},
-        "sca": {"tool": "Dependabot+Snyk", "status": "pending", "findings": []},
-        "container": {"tool": "Trivy", "status": "pending", "findings": []},
-        "iac": {"tool": "Checkov+tfsec", "status": "pending", "findings": []},
-        "secrets": {"tool": "Gitleaks", "status": "pending", "findings": []},
+        "sast": {"tool": "LLM-SAST", "status": "completed", "findings": []},
+        "sca": {"tool": "Dependency-Check", "status": "completed", "findings": []},
+        "secrets": {"tool": "Secret-Scanner", "status": "completed", "findings": []},
     }
+
+    # SAST: Analyze diff for security vulnerabilities
+    if diff:
+        sast_prompt = """You are a security engineer performing a SAST review. Analyze the code diff for:
+1. Injection vulnerabilities (SQL, XSS, Command, LDAP)
+2. Authentication/authorization flaws
+3. Sensitive data exposure (hardcoded secrets, PII leaks)
+4. Insecure deserialization
+5. Security misconfigurations
+6. Cryptographic weaknesses
+7. Path traversal / file inclusion
+8. Race conditions
+
+For each finding, return JSON array:
+[{"severity": "critical|high|medium|low", "category": "OWASP category", "file": "filename", "line": "approx line", "description": "what's wrong", "remediation": "how to fix"}]
+
+If no issues found, return: []
+Only return the JSON array, no other text."""
+
+        try:
+            messages = [
+                SystemMessage(content=sast_prompt),
+                HumanMessage(content=f"PR Diff:\n```\n{diff[:12000]}\n```"),
+            ]
+            response = await llm_provider.ainvoke(messages)
+            content = response.content.strip()
+            # Parse findings
+            json_match = re.search(r'\[.*\]', content, re.DOTALL)
+            if json_match:
+                findings = json.loads(json_match.group())
+                if isinstance(findings, list):
+                    scan_results["sast"]["findings"] = findings
+        except Exception as e:
+            logger.warning("SAST scan failed", error=str(e))
+            scan_results["sast"]["status"] = "error"
+
+    # Secret Detection: Check for leaked secrets in diff
+    if diff:
+        secret_patterns = [
+            r'(?i)(api[_-]?key|apikey)\s*[=:]\s*["\']?[A-Za-z0-9_\-]{20,}',
+            r'(?i)(secret|password|passwd|pwd)\s*[=:]\s*["\']?[^\s"\']{8,}',
+            r'(?i)(aws_access_key_id|aws_secret_access_key)\s*[=:]\s*["\']?[A-Za-z0-9/+=]{20,}',
+            r'ghp_[A-Za-z0-9]{36}',
+            r'github_pat_[A-Za-z0-9_]{80,}',
+            r'-----BEGIN (RSA |EC )?PRIVATE KEY-----',
+        ]
+        for pattern in secret_patterns:
+            matches = re.findall(pattern, diff)
+            if matches:
+                scan_results["secrets"]["findings"].append({
+                    "severity": "critical",
+                    "category": "Secret Exposure",
+                    "description": f"Potential secret/credential found matching pattern",
+                    "remediation": "Remove secret and rotate credentials. Use environment variables or secrets manager.",
+                })
+                break  # One finding is enough to flag
+
+    # SCA: Check dependency files for known patterns
+    dep_files = [f for f in changed_files if f.get("filename", "").lower() in (
+        "package.json", "package-lock.json", "requirements.txt", "pyproject.toml",
+        "go.mod", "pom.xml", "build.gradle", "Gemfile.lock", "Cargo.toml",
+    )]
+    if dep_files:
+        dep_filenames = [f.get("filename", "") for f in dep_files]
+        sca_prompt = f"""Analyze these dependency file changes for security concerns:
+- Known vulnerable package patterns
+- Unpinned dependencies that could lead to supply chain attacks  
+- Deprecated packages with known CVEs
+
+Changed dependency files: {dep_filenames}
+
+Diff excerpt (dependency sections):
+```
+{diff[:8000]}
+```
+
+Return JSON array of findings:
+[{{"severity": "high|medium|low", "category": "Dependency Vulnerability", "package": "name", "description": "issue", "remediation": "fix"}}]
+
+If no issues, return: []"""
+
+        try:
+            messages = [
+                SystemMessage(content="You are a dependency security analyst."),
+                HumanMessage(content=sca_prompt),
+            ]
+            response = await llm_provider.ainvoke(messages)
+            content = response.content.strip()
+            json_match = re.search(r'\[.*\]', content, re.DOTALL)
+            if json_match:
+                findings = json.loads(json_match.group())
+                if isinstance(findings, list):
+                    scan_results["sca"]["findings"] = findings
+        except Exception as e:
+            logger.warning("SCA scan failed", error=str(e))
+            scan_results["sca"]["status"] = "error"
+
+    # Count totals
+    total_findings = sum(len(v.get("findings", [])) for v in scan_results.values())
+    critical_count = sum(
+        1 for v in scan_results.values()
+        for f in v.get("findings", [])
+        if f.get("severity") == "critical"
+    )
+    logger.info("Security scan completed",
+                pr_number=pr_number, total_findings=total_findings, critical=critical_count)
 
     return {"scan_results": scan_results}
 
@@ -267,15 +391,26 @@ async def post_security_report(state: SecurityScanState) -> dict[str, Any]:
 
 async def generate_fix_prs(state: SecurityScanState) -> dict[str, Any]:
     """Generate fix PRs for auto-remediable vulnerabilities."""
-    # In production, this would generate actual code fixes
     fix_prs: list[str] = []
 
     task = state["task"]
     task.status = TaskStatus.COMPLETED
     task.completed_at = datetime.now(timezone.utc).isoformat()
+
+    # Summarize findings by severity
+    severity_counts: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for scan_type, data in state["scan_results"].items():
+        for finding in data.get("findings", []):
+            sev = finding.get("severity", "low").lower()
+            severity_counts[sev] = severity_counts.get(sev, 0) + 1
+
     task.output_data = {
-        "scan_results": {k: v.get("status") for k, v in state["scan_results"].items()},
+        "scan_results": {k: {"status": v.get("status"), "findings_count": len(v.get("findings", []))} for k, v in state["scan_results"].items()},
+        "severity_summary": severity_counts,
+        "total_findings": sum(severity_counts.values()),
+        "has_critical": severity_counts["critical"] > 0,
         "fix_prs_created": len(fix_prs),
+        "security_report": state.get("security_report", ""),
     }
     task.tokens_used = llm_provider.tokens_used
     await state_manager.update_task(task)

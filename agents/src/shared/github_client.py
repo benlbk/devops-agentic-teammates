@@ -221,6 +221,17 @@ class GitHubClient:
         response.raise_for_status()
         return response.text
 
+    async def list_pr_files(
+        self, owner: str, repo: str, pr_number: int,
+    ) -> list[dict[str, Any]]:
+        headers = await self._auth_headers()
+        response = await self._http.get(
+            f"/repos/{owner}/{repo}/pulls/{pr_number}/files",
+            headers=headers,
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def create_review_comment(
         self, owner: str, repo: str, pr_number: int,
         body: str, commit_id: str, path: str, line: int,

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import Link from "next/link";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"] });
@@ -29,6 +30,9 @@ export default function RootLayout({
 function Sidebar() {
   const navItems = [
     { href: "/", label: "Overview", icon: "📊" },
+    { href: "/pipeline", label: "Pipeline", icon: "🔄" },
+    { href: "/observability", label: "Observability", icon: "📡" },
+    { href: "/approvals", label: "Approvals", icon: "🛡️" },
     { href: "/portal", label: "Ops Portal", icon: "⚡" },
     { href: "/dora", label: "DORA Metrics", icon: "📈" },
     { href: "/agents", label: "Agent Activity", icon: "🤖" },
@@ -46,14 +50,14 @@ function Sidebar() {
       </div>
       <nav className="flex-1 p-4 space-y-1">
         {navItems.map((item) => (
-          <a
+          <Link
             key={item.href}
             href={item.href}
             className="flex items-center gap-3 px-3 py-2 rounded-md text-sm hover:bg-gray-800 transition-colors"
           >
             <span>{item.icon}</span>
             <span>{item.label}</span>
-          </a>
+          </Link>
         ))}
       </nav>
     </aside>

@@ -101,12 +101,12 @@ export default function PortalHome() {
       <div className="bg-white rounded-xl border p-6">
         <h2 className="text-lg font-semibold mb-3">Platform Quick Links</h2>
         <div className="flex flex-wrap gap-3">
-          <a href="/" className="text-sm text-blue-600 hover:underline">📊 Monitoring Dashboard</a>
-          <a href="/dora" className="text-sm text-blue-600 hover:underline">📈 DORA Metrics</a>
-          <a href="/agents" className="text-sm text-blue-600 hover:underline">🤖 Agent Activity</a>
-          <a href="/security" className="text-sm text-blue-600 hover:underline">🔒 Security</a>
-          <a href="/environments" className="text-sm text-blue-600 hover:underline">🌍 Environments</a>
-          <a href="/costs" className="text-sm text-blue-600 hover:underline">💰 Costs</a>
+          <Link href="/" className="text-sm text-blue-600 hover:underline">📊 Monitoring Dashboard</Link>
+          <Link href="/dora" className="text-sm text-blue-600 hover:underline">📈 DORA Metrics</Link>
+          <Link href="/agents" className="text-sm text-blue-600 hover:underline">🤖 Agent Activity</Link>
+          <Link href="/security" className="text-sm text-blue-600 hover:underline">🔒 Security</Link>
+          <Link href="/environments" className="text-sm text-blue-600 hover:underline">🌍 Environments</Link>
+          <Link href="/costs" className="text-sm text-blue-600 hover:underline">💰 Costs</Link>
         </div>
       </div>
     </div>

@@ -173,6 +173,26 @@ class ApprovalRequest(BaseModel):
     comment: str = ""
 
 
+@app.get("/api/approvals")
+async def list_pending_approvals() -> list[dict[str, Any]]:
+    """List all tasks awaiting human approval."""
+    tasks = await state_manager.get_tasks_by_status(TaskStatus.AWAITING_APPROVAL)
+    results = []
+    for t in tasks:
+        results.append({
+            "task_id": t.task_id,
+            "agent_type": t.agent_type,
+            "task_type": t.task_type,
+            "repository": t.context.get("repository", ""),
+            "pr_number": t.context.get("prNumber") or t.context.get("pr_number"),
+            "issue_number": t.context.get("issue_number") or t.context.get("issueNumber"),
+            "created_at": t.created_at,
+            "context": t.context,
+            "output_data": t.output_data,
+        })
+    return results
+
+
 @app.post("/api/approvals")
 async def handle_approval(request: ApprovalRequest) -> dict[str, str]:
     """Handle a human approval or rejection."""
@@ -187,14 +207,46 @@ async def handle_approval(request: ApprovalRequest) -> dict[str, str]:
         )
 
     if request.approved:
-        task.status = TaskStatus.PENDING
-        await state_manager.update_task(task)
-        await event_publisher.publish_task_requested(
-            agent_type=task.agent_type,
-            task_type=task.task_type,
-            context=task.context,
-        )
-        return {"message": f"Task approved by {request.approver} and dispatched"}
+        # For merge-approval tasks, trigger the actual merge
+        if task.task_type == "merge-approval":
+            from shared.github_client import github_client
+            repository = task.context.get("repository", "")
+            pr_number = task.context.get("pr_number") or task.context.get("prNumber")
+
+            try:
+                owner, repo = repository.split("/")
+                result = await github_client.merge_pull_request(
+                    owner=owner,
+                    repo=repo,
+                    pr_number=int(pr_number),
+                    merge_method="squash",
+                    commit_title=f"Merge PR #{pr_number} (approved by {request.approver})",
+                )
+                task.status = TaskStatus.COMPLETED
+                task.completed_at = __import__("datetime").datetime.now(
+                    __import__("datetime").timezone.utc
+                ).isoformat()
+                task.output_data = task.output_data or {}
+                task.output_data["merged"] = True
+                task.output_data["approved_by"] = request.approver
+                task.output_data["merge_sha"] = result.get("sha", "")
+                await state_manager.update_task(task)
+                logger.info("PR merged after approval", pr_number=pr_number, approver=request.approver)
+                return {"message": f"PR #{pr_number} merged (approved by {request.approver})"}
+            except Exception as e:
+                task.status = TaskStatus.FAILED
+                task.error = f"Merge failed: {str(e)}"
+                await state_manager.update_task(task)
+                return {"message": f"Approval accepted but merge failed: {str(e)}"}
+        else:
+            task.status = TaskStatus.PENDING
+            await state_manager.update_task(task)
+            await event_publisher.publish_task_requested(
+                agent_type=task.agent_type,
+                task_type=task.task_type,
+                context=task.context,
+            )
+            return {"message": f"Task approved by {request.approver} and dispatched"}
     else:
         task.status = TaskStatus.CANCELLED
         task.error = f"Rejected by {request.approver}: {request.comment}"
@@ -783,16 +835,188 @@ async def execute_agent_task(task: AgentTask) -> None:
 
 @app.post("/webhooks/github")
 async def github_webhook(request: Request, background_tasks: BackgroundTasks) -> dict[str, str]:
-    """Receive and route GitHub webhook events."""
+    """Receive and route GitHub webhook events with smart automation triggers."""
+    import hmac
+    import hashlib
+
     event_type = request.headers.get("X-GitHub-Event", "")
-    payload = await request.json()
+    body = await request.body()
 
-    logger.info("Received GitHub webhook", event_type=event_type)
+    # Verify webhook signature if secret is configured
+    webhook_secret = getattr(settings, "github_webhook_secret", None)
+    if webhook_secret:
+        signature = request.headers.get("X-Hub-Signature-256", "")
+        expected = "sha256=" + hmac.new(
+            webhook_secret.encode(), body, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            logger.warning("Invalid webhook signature")
+            return {"message": "Invalid signature"}
 
+    payload = __import__("json").loads(body)
+    action = payload.get("action", "")
+    repo = payload.get("repository", {}).get("full_name", "unknown")
+    sender = payload.get("sender", {}).get("login", "")
+
+    logger.info("Received GitHub webhook", event_type=event_type, action=action, repo=repo, sender=sender)
+
+    # --- Push events: RAG indexing only ---
+    if event_type == "push":
+        background_tasks.add_task(index_push_changes, repo, payload)
+        return {"message": "Push event — RAG indexing only"}
+
+    # --- Pull Request events: auto-review ---
+    if event_type == "pull_request":
+        pr = payload.get("pull_request", {})
+        pr_number = pr.get("number")
+
+        # Only trigger on opened or synchronize (new commits pushed)
+        if action not in ("opened", "synchronize"):
+            logger.info("PR event ignored (action not reviewable)", action=action)
+            return {"message": f"PR event '{action}' — no action needed"}
+
+        # Skip draft PRs
+        if pr.get("draft", False):
+            logger.info("Skipping draft PR", pr_number=pr_number)
+            return {"message": "Draft PR — skipping auto-review"}
+
+        # Skip bot-authored PRs to avoid infinite loops
+        if sender.endswith("[bot]") or sender in ("dependabot", "renovate"):
+            logger.info("Skipping bot PR", sender=sender)
+            return {"message": f"Bot PR from {sender} — skipping"}
+
+        task = AgentTask(
+            agent_type="code-build",
+            task_type="code-review",
+            context={
+                "repository": repo,
+                "prNumber": pr_number,
+                "pr_number": pr_number,
+                "githubEvent": event_type,
+                "action": action,
+                "sender": sender,
+            },
+            input_data={"payload": payload},
+            idempotency_key=f"{repo}/pr-review/{pr_number}/{pr.get('head', {}).get('sha', '')}",
+        )
+
+        original_id = task.task_id
+        task = await state_manager.create_task(task)
+        if task.task_id != original_id:
+            logger.info("Duplicate PR review skipped", pr_number=pr_number, existing_task=task.task_id)
+            return {"message": f"Duplicate — PR #{pr_number} review already in progress"}
+
+        await event_publisher.publish_task_requested(
+            agent_type="code-build", task_type="code-review", context=task.context,
+        )
+        background_tasks.add_task(execute_agent_task, task)
+        logger.info("Auto-review triggered for PR", pr_number=pr_number, repo=repo)
+
+        # Also trigger security scan in parallel
+        sec_task = AgentTask(
+            agent_type="test-secure",
+            task_type="security-scan",
+            context={
+                "repository": repo,
+                "prNumber": pr_number,
+                "pr_number": pr_number,
+                "githubEvent": event_type,
+                "action": action,
+                "sender": sender,
+            },
+            input_data={},
+            idempotency_key=f"{repo}/pr-security/{pr_number}/{pr.get('head', {}).get('sha', '')}",
+        )
+        sec_original_id = sec_task.task_id
+        sec_task = await state_manager.create_task(sec_task)
+        if sec_task.task_id == sec_original_id:
+            background_tasks.add_task(execute_agent_task, sec_task)
+            logger.info("Security scan triggered for PR", pr_number=pr_number, repo=repo)
+
+        return {"message": f"Auto-review + security scan triggered for PR #{pr_number}"}
+
+    # --- Issue events: auto-codegen or feature planning ---
+    if event_type == "issues":
+        issue = payload.get("issue", {})
+        issue_number = issue.get("number")
+        issue_labels = [l.get("name", "") for l in issue.get("labels", [])]
+
+        # Trigger code generation when issue has 'codegen' label
+        codegen_labels = {"codegen", "auto-codegen", "auto-implement"}
+        should_codegen = bool(codegen_labels & set(issue_labels))
+
+        if action in ("opened", "labeled") and should_codegen:
+            # Skip if issue was opened by a bot
+            issue_author = issue.get("user", {}).get("login", "")
+            if issue_author.endswith("[bot]"):
+                return {"message": "Bot-created issue — skipping"}
+
+            task = AgentTask(
+                agent_type="code-build",
+                task_type="code-generation",
+                context={
+                    "repository": repo,
+                    "issue_number": issue_number,
+                    "issueNumber": issue_number,
+                    "githubEvent": event_type,
+                    "action": action,
+                    "sender": sender,
+                },
+                input_data={"payload": payload},
+                idempotency_key=f"{repo}/issue-codegen/{issue_number}",
+            )
+
+            original_id = task.task_id
+            task = await state_manager.create_task(task)
+            if task.task_id != original_id:
+                logger.info("Duplicate codegen skipped", issue_number=issue_number, existing_task=task.task_id)
+                return {"message": f"Duplicate — issue #{issue_number} codegen already in progress"}
+
+            await event_publisher.publish_task_requested(
+                agent_type="code-build", task_type="code-generation", context=task.context,
+            )
+            background_tasks.add_task(execute_agent_task, task)
+            logger.info("Auto-codegen triggered for issue", issue_number=issue_number, repo=repo)
+            return {"message": f"Auto-codegen triggered for issue #{issue_number}"}
+
+        # Feature planning for issues with 'feature' or 'enhancement' labels
+        planning_labels = {"feature", "enhancement", "agent-generated"}
+        should_plan = bool(planning_labels & set(issue_labels))
+
+        if action == "opened" and should_plan:
+            task = AgentTask(
+                agent_type="plan-collaborate",
+                task_type="feature-planning",
+                context={
+                    "repository": repo,
+                    "issue_number": issue_number,
+                    "featureDescription": f"{issue.get('title', '')}\n\n{issue.get('body', '')}",
+                    "githubEvent": event_type,
+                    "action": action,
+                    "sender": sender,
+                },
+                input_data={"payload": payload},
+                idempotency_key=f"{repo}/issue-plan/{issue_number}",
+            )
+
+            original_id = task.task_id
+            task = await state_manager.create_task(task)
+            if task.task_id != original_id:
+                logger.info("Duplicate planning skipped", issue_number=issue_number, existing_task=task.task_id)
+                return {"message": f"Duplicate — issue #{issue_number} planning already in progress"}
+
+            await event_publisher.publish_task_requested(
+                agent_type="plan-collaborate", task_type="feature-planning", context=task.context,
+            )
+            background_tasks.add_task(execute_agent_task, task)
+            logger.info("Feature planning triggered for issue", issue_number=issue_number, repo=repo)
+            return {"message": f"Feature planning triggered for issue #{issue_number}"}
+
+        logger.info("Issue event ignored (no matching labels/action)", action=action, labels=issue_labels)
+        return {"message": f"Issue event '{action}' — no automation labels found"}
+
+    # --- Fallback: generic routing for other event types ---
     routing_map = {
-        "pull_request": "code-build",
-        "push": "code-build",
-        "issues": "plan-collaborate",
         "issue_comment": "plan-collaborate",
         "check_run": "test-secure",
         "check_suite": "test-secure",
@@ -804,19 +1028,8 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks) ->
     }
 
     agent_type = routing_map.get(event_type, "code-build")
-    action = payload.get("action", "")
     task_type = f"{event_type}.{action}" if action else event_type
-
-    repo = payload.get("repository", {}).get("full_name", "unknown")
-    pr_number = (
-        payload.get("pull_request", {}).get("number")
-        or payload.get("number")
-    )
-
-    # Push events only trigger RAG indexing, not agent tasks
-    if event_type == "push":
-        background_tasks.add_task(index_push_changes, repo, payload)
-        return {"message": "Push event — RAG indexing only"}
+    pr_number = payload.get("pull_request", {}).get("number") or payload.get("number")
 
     task = AgentTask(
         agent_type=agent_type,
@@ -826,7 +1039,7 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks) ->
             "prNumber": pr_number,
             "githubEvent": event_type,
             "action": action,
-            "sender": payload.get("sender", {}).get("login"),
+            "sender": sender,
         },
         input_data={"payload": payload},
         idempotency_key=f"{repo}/{event_type}/{action}/{pr_number}/{payload.get('after', '')}",
@@ -834,15 +1047,45 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks) ->
 
     await state_manager.create_task(task)
     await event_publisher.publish_task_requested(
-        agent_type=agent_type,
-        task_type=task_type,
-        context=task.context,
+        agent_type=agent_type, task_type=task_type, context=task.context,
     )
-
-    # Execute agent in background (in-process for EKS deployment)
     background_tasks.add_task(execute_agent_task, task)
 
     return {"message": f"Routed to {agent_type} agent"}
+
+
+@app.get("/webhooks/github/info")
+async def webhook_info() -> dict:
+    """Return webhook automation config for diagnostics."""
+    return {
+        "webhook_url": "/orchestrator/webhooks/github",
+        "supported_events": ["pull_request", "issues", "push", "issue_comment",
+                             "check_run", "check_suite", "workflow_run",
+                             "release", "deployment", "deployment_status", "status"],
+        "automation_rules": [
+            {
+                "trigger": "pull_request.opened / pull_request.synchronize",
+                "action": "Auto code review",
+                "conditions": "Non-draft, non-bot author",
+            },
+            {
+                "trigger": "issues.opened / issues.labeled",
+                "action": "Auto code generation",
+                "conditions": "Issue has label: codegen, auto-codegen, or auto-implement",
+            },
+            {
+                "trigger": "issues.opened",
+                "action": "Feature planning",
+                "conditions": "Issue has label: feature, enhancement, or agent-generated",
+            },
+            {
+                "trigger": "push",
+                "action": "RAG indexing of changed files",
+                "conditions": "Always (code files only)",
+            },
+        ],
+        "signature_verification": bool(settings.github_webhook_secret),
+    }
 
 
 async def index_push_changes(repository: str, payload: dict[str, Any]) -> None:
@@ -903,27 +1146,116 @@ async def index_push_changes(repository: str, payload: dict[str, Any]) -> None:
 @app.get("/api/metrics/dora")
 async def dora_metrics() -> dict[str, Any]:
     """Return DORA metrics computed from task history."""
-    tasks = await state_manager.get_tasks_by_status(TaskStatus.COMPLETED)
-    deploy_tasks = [t for t in tasks if "deploy" in t.task_type]
-    failed_tasks = [t for t in deploy_tasks if t.output_data and t.output_data.get("rollback")]
-
     from datetime import datetime, timezone, timedelta
-    now = datetime.now(timezone.utc)
-    day_ago = now - timedelta(hours=24)
 
-    recent_deploys = [
+    now = datetime.now(timezone.utc)
+    all_completed = await state_manager.get_tasks_by_status(TaskStatus.COMPLETED)
+    all_failed = await state_manager.get_tasks_by_status(TaskStatus.FAILED)
+
+    # Deployment frequency: count merge/deploy tasks in last 24h
+    day_ago = now - timedelta(hours=24)
+    week_ago = now - timedelta(days=7)
+    deploy_types = {"deploy", "release", "merge-approval"}
+    deploy_tasks = [t for t in all_completed if any(dt in t.task_type for dt in deploy_types)]
+    failed_deploys = [t for t in deploy_tasks if t.output_data and t.output_data.get("rollback")]
+
+    recent_deploys_24h = [
         t for t in deploy_tasks
         if t.completed_at and datetime.fromisoformat(t.completed_at) > day_ago
     ]
+    recent_deploys_7d = [
+        t for t in deploy_tasks
+        if t.completed_at and datetime.fromisoformat(t.completed_at) > week_ago
+    ]
+    deploy_freq = len(recent_deploys_7d) / 7.0 if recent_deploys_7d else len(recent_deploys_24h)
+
+    # Lead time for changes: time from task created to completed (code-review + merge-approval cycle)
+    review_tasks = [t for t in all_completed if t.task_type in ("code-review", "merge-approval")]
+    lead_times: list[float] = []
+    for t in review_tasks:
+        if t.created_at and t.completed_at:
+            try:
+                created = datetime.fromisoformat(t.created_at)
+                completed = datetime.fromisoformat(t.completed_at)
+                lead_times.append((completed - created).total_seconds() / 3600.0)
+            except (ValueError, TypeError):
+                pass
+    avg_lead_time = round(sum(lead_times) / len(lead_times), 1) if lead_times else 0
+
+    # Change failure rate
+    cfr = round(len(failed_deploys) / max(len(deploy_tasks), 1) * 100, 1)
+
+    # Mean time to recovery: time from failure to next success
+    all_tasks_sorted = sorted(
+        all_completed + all_failed,
+        key=lambda t: t.completed_at or t.started_at or "",
+    )
+    recovery_times: list[float] = []
+    for i, t in enumerate(all_tasks_sorted):
+        if t.status == TaskStatus.FAILED and t.completed_at:
+            # Find next completed task of same type
+            for later in all_tasks_sorted[i + 1:]:
+                if later.agent_type == t.agent_type and later.status == TaskStatus.COMPLETED and later.completed_at:
+                    try:
+                        failed_at = datetime.fromisoformat(t.completed_at)
+                        recovered_at = datetime.fromisoformat(later.completed_at)
+                        recovery_times.append((recovered_at - failed_at).total_seconds() / 60.0)
+                    except (ValueError, TypeError):
+                        pass
+                    break
+    avg_mttr = round(sum(recovery_times) / len(recovery_times), 1) if recovery_times else 0
+
+    # Performance level classification (DORA 2023 benchmarks)
+    def classify_freq(v: float) -> str:
+        if v >= 1: return "elite"
+        if v >= 0.14: return "high"  # ~weekly
+        if v >= 0.03: return "medium"  # ~monthly
+        return "low"
+
+    def classify_lead(v: float) -> str:
+        if v < 1: return "elite"
+        if v < 24: return "high"
+        if v < 168: return "medium"
+        return "low"
+
+    def classify_cfr(v: float) -> str:
+        if v <= 5: return "elite"
+        if v <= 10: return "high"
+        if v <= 15: return "medium"
+        return "low"
+
+    def classify_mttr(v: float) -> str:
+        if v < 60: return "elite"
+        if v < 1440: return "high"  # <1 day
+        if v < 10080: return "medium"  # <1 week
+        return "low"
 
     return {
-        "deployment_frequency": {"value": len(recent_deploys), "unit": "per_day"},
-        "lead_time_for_changes": {"value": 0, "unit": "hours"},
-        "change_failure_rate": {
-            "value": round(len(failed_tasks) / max(len(deploy_tasks), 1) * 100, 1),
-            "unit": "percent",
+        "deployment_frequency": {
+            "value": round(deploy_freq, 2),
+            "unit": "per_day",
+            "level": classify_freq(deploy_freq),
+            "total_7d": len(recent_deploys_7d),
         },
-        "mean_time_to_recovery": {"value": 0, "unit": "minutes"},
+        "lead_time_for_changes": {
+            "value": avg_lead_time,
+            "unit": "hours",
+            "level": classify_lead(avg_lead_time),
+            "sample_size": len(lead_times),
+        },
+        "change_failure_rate": {
+            "value": cfr,
+            "unit": "percent",
+            "level": classify_cfr(cfr),
+            "failed": len(failed_deploys),
+            "total": len(deploy_tasks),
+        },
+        "mean_time_to_recovery": {
+            "value": avg_mttr,
+            "unit": "minutes",
+            "level": classify_mttr(avg_mttr),
+            "sample_size": len(recovery_times),
+        },
     }
 
 
@@ -1085,6 +1417,269 @@ async def list_runbooks() -> dict[str, Any]:
             {"name": name, "description": fn.__doc__ or ""}
             for name, fn in RUNBOOK_REGISTRY.items()
         ]
+    }
+
+
+@app.get("/api/pipeline/{owner}/{repo}")
+async def pipeline_status(owner: str, repo: str) -> dict[str, Any]:
+    """Get pipeline status per issue for a repository."""
+    import re as _re
+    repository = f"{owner}/{repo}"
+    tasks = await state_manager.get_tasks_by_repository(repository)
+
+    # Index all tasks and build PR→issue mapping
+    issues: dict[int, dict[str, Any]] = {}
+    pr_to_issue: dict[int, int] = {}  # pr_number → issue_number
+    review_tasks: list = []  # tasks with task_type == code-review
+    fix_tasks: list = []  # fix-mode code-generation tasks
+
+    for t in tasks:
+        issue_num = t.context.get("issue_number")
+        pr_num = t.context.get("pr_number")
+
+        # Track code-generation tasks (they link issue → PR)
+        if t.task_type == "code-generation" and not t.context.get("fix_mode") and issue_num:
+            issue_num = int(issue_num)
+            if issue_num not in issues:
+                issues[issue_num] = {
+                    "issue_number": issue_num,
+                    "title": t.context.get("title", ""),
+                    "stages": {},
+                }
+            # Extract PR number from output
+            output_pr_url = (t.output_data or {}).get("pr_url", "")
+            pr_match = _re.search(r'/pull/(\d+)', output_pr_url)
+            if pr_match:
+                linked_pr = int(pr_match.group(1))
+                pr_to_issue[linked_pr] = issue_num
+
+            existing = issues[issue_num]["stages"].get("code_generation")
+            if not existing or (t.created_at > existing.get("created_at", "")):
+                issues[issue_num]["stages"]["code_generation"] = {
+                    "status": t.status.value,
+                    "task_id": t.task_id,
+                    "created_at": t.created_at,
+                    "completed_at": t.completed_at,
+                    "output": t.output_data or {},
+                }
+
+        elif t.task_type in ("sprint-planning", "feature-planning") and issue_num:
+            issue_num = int(issue_num)
+            if issue_num not in issues:
+                issues[issue_num] = {"issue_number": issue_num, "title": "", "stages": {}}
+            issues[issue_num]["stages"]["planning"] = {
+                "status": t.status.value,
+                "task_id": t.task_id,
+                "created_at": t.created_at,
+                "completed_at": t.completed_at,
+                "output": {},
+            }
+
+        elif t.task_type == "code-review":
+            review_tasks.append(t)
+
+        elif t.task_type == "code-generation" and t.context.get("fix_mode"):
+            fix_tasks.append(t)
+
+    # Correlate review tasks via PR number
+    for t in review_tasks:
+        pr_num = t.context.get("pr_number")
+        if pr_num and int(pr_num) in pr_to_issue:
+            issue_num = pr_to_issue[int(pr_num)]
+            existing = issues[issue_num]["stages"].get("review")
+            if not existing or (t.created_at > existing.get("created_at", "")):
+                issues[issue_num]["stages"]["review"] = {
+                    "status": t.status.value,
+                    "task_id": t.task_id,
+                    "created_at": t.created_at,
+                    "completed_at": t.completed_at,
+                    "output": t.output_data or {},
+                }
+
+    # Correlate fix tasks via PR number
+    for t in fix_tasks:
+        pr_num = t.context.get("fix_pr_number") or t.context.get("pr_number")
+        if pr_num and int(pr_num) in pr_to_issue:
+            issue_num = pr_to_issue[int(pr_num)]
+            existing = issues[issue_num]["stages"].get("fix")
+            if not existing or (t.created_at > existing.get("created_at", "")):
+                issues[issue_num]["stages"]["fix"] = {
+                    "status": t.status.value,
+                    "task_id": t.task_id,
+                    "created_at": t.created_at,
+                    "completed_at": t.completed_at,
+                    "output": t.output_data or {},
+                }
+
+    # Enrich from GitHub: titles, states, and infer merged stage
+    try:
+        from shared.github_client import github_client
+        gh_issues = await github_client.list_issues(owner, repo, state="all")
+        for gi in gh_issues:
+            if "pull_request" in gi:
+                continue  # skip PRs returned by issues API
+            num = gi["number"]
+            labels = [l["name"] for l in gi.get("labels", [])]
+            if num in issues:
+                issues[num]["title"] = gi["title"]
+                issues[num]["state"] = gi["state"]
+                issues[num]["labels"] = labels
+                # Infer planning completed if issue has agent-generated label
+                if "agent-generated" in labels and "planning" not in issues[num]["stages"]:
+                    issues[num]["stages"]["planning"] = {
+                        "status": "completed",
+                        "task_id": "",
+                        "created_at": gi.get("created_at", ""),
+                        "completed_at": gi.get("created_at", ""),
+                        "output": {},
+                    }
+                # If issue is closed and has code_generation, infer merged
+                if gi["state"] == "closed" and "code_generation" in issues[num]["stages"]:
+                    issues[num]["stages"]["merge"] = {
+                        "status": "completed",
+                        "task_id": "",
+                        "created_at": gi.get("closed_at", ""),
+                        "completed_at": gi.get("closed_at", ""),
+                        "output": {},
+                    }
+            elif gi["state"] == "open":
+                planning_stage = {}
+                if "agent-generated" in labels:
+                    planning_stage = {"planning": {
+                        "status": "completed", "task_id": "",
+                        "created_at": gi.get("created_at", ""),
+                        "completed_at": gi.get("created_at", ""), "output": {},
+                    }}
+                issues[num] = {
+                    "issue_number": num,
+                    "title": gi["title"],
+                    "state": gi["state"],
+                    "labels": labels,
+                    "stages": planning_stage,
+                }
+    except Exception:
+        pass
+
+    # Sort by issue number
+    sorted_issues = sorted(issues.values(), key=lambda x: x["issue_number"])
+    return {"repository": repository, "issues": sorted_issues}
+
+
+@app.get("/api/metrics/performance")
+async def performance_metrics(hours: int = 168) -> dict[str, Any]:
+    """Return agent performance metrics: tokens, success rates, cycle times."""
+    from datetime import datetime, timezone, timedelta
+
+    tasks = await state_manager.get_all_tasks_recent(hours=hours)
+
+    # Per-agent aggregation
+    agents: dict[str, dict[str, Any]] = {}
+    total_tokens = 0
+    total_completed = 0
+    total_failed = 0
+    cycle_times: list[float] = []
+
+    for t in tasks:
+        agent = t.agent_type
+        if agent not in agents:
+            agents[agent] = {
+                "total": 0, "completed": 0, "failed": 0,
+                "tokens_used": 0, "cycle_times_sec": [],
+            }
+        agents[agent]["total"] += 1
+        agents[agent]["tokens_used"] += t.tokens_used
+        total_tokens += t.tokens_used
+
+        if t.status == TaskStatus.COMPLETED:
+            agents[agent]["completed"] += 1
+            total_completed += 1
+            # Calculate cycle time
+            if t.started_at and t.completed_at:
+                try:
+                    start = datetime.fromisoformat(t.started_at)
+                    end = datetime.fromisoformat(t.completed_at)
+                    duration = (end - start).total_seconds()
+                    if 0 < duration < 3600:  # sanity: under 1 hour
+                        agents[agent]["cycle_times_sec"].append(duration)
+                        cycle_times.append(duration)
+                except (ValueError, TypeError):
+                    pass
+        elif t.status == TaskStatus.FAILED:
+            agents[agent]["failed"] += 1
+            total_failed += 1
+
+    # Build per-agent summary
+    agent_summary = {}
+    for name, data in agents.items():
+        ct = data["cycle_times_sec"]
+        agent_summary[name] = {
+            "total_tasks": data["total"],
+            "completed": data["completed"],
+            "failed": data["failed"],
+            "success_rate": round(data["completed"] / max(data["total"], 1) * 100, 1),
+            "tokens_used": data["tokens_used"],
+            "avg_cycle_time_sec": round(sum(ct) / len(ct), 1) if ct else 0,
+            "p95_cycle_time_sec": round(sorted(ct)[int(len(ct) * 0.95)] if ct else 0, 1),
+        }
+
+    # By task type
+    task_types: dict[str, dict[str, Any]] = {}
+    for t in tasks:
+        tt = t.task_type
+        if tt not in task_types:
+            task_types[tt] = {"total": 0, "completed": 0, "failed": 0, "tokens": 0, "cycle_times": []}
+        task_types[tt]["total"] += 1
+        task_types[tt]["tokens"] += t.tokens_used
+        if t.status == TaskStatus.COMPLETED:
+            task_types[tt]["completed"] += 1
+            if t.started_at and t.completed_at:
+                try:
+                    dur = (datetime.fromisoformat(t.completed_at) - datetime.fromisoformat(t.started_at)).total_seconds()
+                    if 0 < dur < 3600:
+                        task_types[tt]["cycle_times"].append(dur)
+                except (ValueError, TypeError):
+                    pass
+        elif t.status == TaskStatus.FAILED:
+            task_types[tt]["failed"] += 1
+
+    task_type_summary = {}
+    for tt, data in task_types.items():
+        ct = data["cycle_times"]
+        task_type_summary[tt] = {
+            "total": data["total"],
+            "completed": data["completed"],
+            "failed": data["failed"],
+            "success_rate": round(data["completed"] / max(data["total"], 1) * 100, 1),
+            "tokens_used": data["tokens"],
+            "avg_cycle_time_sec": round(sum(ct) / len(ct), 1) if ct else 0,
+        }
+
+    # Timeline (recent tasks for chart)
+    timeline = []
+    for t in sorted(tasks, key=lambda x: x.created_at)[-50:]:
+        timeline.append({
+            "task_id": t.task_id,
+            "agent_type": t.agent_type,
+            "task_type": t.task_type,
+            "status": t.status.value,
+            "tokens_used": t.tokens_used,
+            "created_at": t.created_at,
+            "cycle_time_sec": round(
+                (datetime.fromisoformat(t.completed_at) - datetime.fromisoformat(t.started_at)).total_seconds(), 1
+            ) if t.started_at and t.completed_at else None,
+        })
+
+    return {
+        "period_hours": hours,
+        "total_tasks": len(tasks),
+        "total_completed": total_completed,
+        "total_failed": total_failed,
+        "overall_success_rate": round(total_completed / max(total_completed + total_failed, 1) * 100, 1),
+        "total_tokens_used": total_tokens,
+        "avg_cycle_time_sec": round(sum(cycle_times) / len(cycle_times), 1) if cycle_times else 0,
+        "agents": agent_summary,
+        "task_types": task_type_summary,
+        "timeline": timeline,
     }
 
 

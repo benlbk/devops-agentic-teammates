@@ -62,7 +62,7 @@ class LLMProvider:
 
     def _track_usage(self, response: Any) -> None:
         usage = getattr(response, "usage_metadata", None)
-        if usage:
+        if usage and isinstance(usage, dict):
             self._tokens_used += usage.get("total_tokens", 0)
 
     @retry(

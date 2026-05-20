@@ -124,16 +124,22 @@ class StateManager:
 
     async def get_task(self, agent_type: str, task_id: str) -> AgentTask | None:
         """Retrieve a task by agent type and task ID."""
-        response = self._table.query(
-            KeyConditionExpression="PK = :pk",
-            FilterExpression="task_id = :tid",
-            ExpressionAttributeValues={
+        kwargs = {
+            "KeyConditionExpression": "PK = :pk",
+            "FilterExpression": "task_id = :tid",
+            "ExpressionAttributeValues": {
                 ":pk": self._make_pk(agent_type),
                 ":tid": task_id,
             },
-        )
-        items = response.get("Items", [])
-        return AgentTask(**items[0]) if items else None
+        }
+        while True:
+            response = self._table.query(**kwargs)
+            items = response.get("Items", [])
+            if items:
+                return AgentTask(**items[0])
+            if "LastEvaluatedKey" not in response:
+                return None
+            kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
 
     async def get_by_idempotency_key(
         self, agent_type: str, key: str

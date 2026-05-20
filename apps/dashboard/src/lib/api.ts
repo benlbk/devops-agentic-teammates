@@ -5,11 +5,21 @@ const api = axios.create({
   timeout: 10000,
 });
 
+export interface DORAMetricItem {
+  value: number;
+  unit: string;
+  level?: "elite" | "high" | "medium" | "low";
+  total_7d?: number;
+  sample_size?: number;
+  failed?: number;
+  total?: number;
+}
+
 export interface DORAMetrics {
-  deployment_frequency: { value: number; unit: string };
-  lead_time_for_changes: { value: number; unit: string };
-  change_failure_rate: { value: number; unit: string };
-  mean_time_to_recovery: { value: number; unit: string };
+  deployment_frequency: DORAMetricItem;
+  lead_time_for_changes: DORAMetricItem;
+  change_failure_rate: DORAMetricItem;
+  mean_time_to_recovery: DORAMetricItem;
 }
 
 export interface AgentMetrics {

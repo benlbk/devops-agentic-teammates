@@ -96,6 +96,10 @@ function PortalNav() {
         <span className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded">
           {config.icon} {config.label}
         </span>
+        <span className="text-sm text-gray-500">|</span>
+        <a href="/portal/tasks" className="text-sm text-blue-600 hover:text-blue-800 font-medium">
+          📋 Task Monitor
+        </a>
       </div>
       <div className="flex items-center gap-4">
         <span className="text-sm text-gray-600">{user.name}</span>

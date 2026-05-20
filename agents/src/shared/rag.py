@@ -12,7 +12,7 @@ from shared.config import settings
 
 logger = structlog.get_logger()
 
-EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
+EMBEDDING_MODEL = "cohere.embed-english-v3"
 INDEX_NAME = "codebase-knowledge"
 
 INDEX_BODY = {

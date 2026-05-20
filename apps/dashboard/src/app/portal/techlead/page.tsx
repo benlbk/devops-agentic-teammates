@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { submitTask, submitApproval, getPendingApprovals, getDORAMetrics, type Approval } from "@/lib/portal-api";
+import { submitTask, submitApproval, getPendingApprovals, getDORAMetrics, type PendingApproval } from "@/lib/portal-api";
 import { TaskResult, FormField, useTaskSubmit } from "../components";
 import { useAuth } from "@/lib/auth-context";
 
@@ -27,7 +27,7 @@ export default function TechLeadPage() {
 
 function ApprovalQueueCard() {
   const { user } = useAuth();
-  const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [loadingApprovals, setLoadingApprovals] = useState(true);
   const [actionResult, setActionResult] = useState<{ taskId: string; result: string } | null>(null);
 
@@ -49,9 +49,11 @@ function ApprovalQueueCard() {
 
   const handleDecision = async (taskId: string, decision: "approved" | "rejected", comment: string) => {
     try {
+      const approval = approvals.find(a => a.task_id === taskId);
       await submitApproval({
         task_id: taskId,
-        decision,
+        agent_type: approval?.agent_type || "code-build",
+        approved: decision === "approved",
         approver: user?.name || "tech-lead",
         comment,
       });
@@ -106,7 +108,7 @@ function ApprovalItem({
   approval,
   onDecision,
 }: {
-  approval: Approval;
+  approval: PendingApproval;
   onDecision: (taskId: string, decision: "approved" | "rejected", comment: string) => void;
 }) {
   const [comment, setComment] = useState("");
@@ -117,7 +119,7 @@ function ApprovalItem({
       <div className="flex items-center justify-between">
         <div>
           <p className="text-sm font-medium">Task: {approval.task_id.slice(0, 12)}...</p>
-          <p className="text-xs text-gray-500">Status: {approval.status} | Created: {approval.created_at || "—"}</p>
+          <p className="text-xs text-gray-500">{approval.task_type} | {approval.repository} | Created: {approval.created_at || "—"}</p>
         </div>
         <button
           onClick={() => setExpanded(!expanded)}

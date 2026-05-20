@@ -23,17 +23,23 @@ export default function PMPage() {
 function FeaturePlanningCard() {
   const [description, setDescription] = useState("");
   const [requirements, setRequirements] = useState("");
+  const [repository, setRepository] = useState("");
   const [targetStack, setTargetStack] = useState("Next.js frontend + .NET backend + PostgreSQL");
   const { loading, result, error, execute } = useTaskSubmit();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const repo = repository.trim()
+      ? (repository.trim().includes("/") ? repository.trim() : `benlbk/${repository.trim()}`)
+      : "benlbk/devops-agentic-teammates";
     execute(() =>
       submitTask({
         agent_type: "plan-collaborate",
         task_type: "feature-planning",
         context: {
+          featureDescription: description,
           description,
+          repository: repo,
           requirements: requirements.split("\n").filter((r) => r.trim()),
           target_stack: targetStack,
         },
@@ -49,6 +55,16 @@ function FeaturePlanningCard() {
       </p>
 
       <form onSubmit={handleSubmit} className="space-y-4">
+        <FormField label="Target Repository" hint="Where to create issues (leave empty for default)">
+          <input
+            type="text"
+            value={repository}
+            onChange={(e) => setRepository(e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+            placeholder="e.g. my-ecommerce-app or benlbk/my-ecommerce-app"
+          />
+        </FormField>
+
         <FormField label="Feature Description" hint="Describe the feature you want to build">
           <textarea
             value={description}
@@ -97,6 +113,7 @@ function SprintPlanningCard() {
   const [sprintGoal, setSprintGoal] = useState("");
   const [capacityDays, setCapacityDays] = useState("10");
   const [teamSize, setTeamSize] = useState("3");
+  const [projectRepo, setProjectRepo] = useState("");
   const { loading, result, error, execute } = useTaskSubmit();
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -109,6 +126,7 @@ function SprintPlanningCard() {
           sprint_goal: sprintGoal,
           capacity_days: parseInt(capacityDays),
           team_size: parseInt(teamSize),
+          ...(projectRepo.trim() && { project_repo: projectRepo.trim() }),
         },
       })
     );
@@ -130,6 +148,16 @@ function SprintPlanningCard() {
             className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
             placeholder="e.g. Complete user authentication MVP"
             required
+          />
+        </FormField>
+
+        <FormField label="Project Repository (new repo for generated code)">
+          <input
+            type="text"
+            value={projectRepo}
+            onChange={(e) => setProjectRepo(e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+            placeholder="e.g. my-ecommerce-app (leave empty to use source repo)"
           />
         </FormField>
 
