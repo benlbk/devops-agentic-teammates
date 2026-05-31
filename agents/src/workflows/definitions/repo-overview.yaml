@@ -1,0 +1,18 @@
+name: repo-overview
+description: >
+  Demo two-step workflow. Fetches GitHub repo stats via the bundled `repo-stats`
+  plugin, then re-runs the same plugin against the repo reported by step one to
+  exercise output->input chaining.
+steps:
+  - name: stats
+    agent_type: operate-monitor
+    task_type: repo-stats
+    context:
+      repository: "{{ context.repository }}"
+
+  - name: verify
+    agent_type: operate-monitor
+    task_type: repo-stats
+    when: "{{ steps.stats.status == 'completed' }}"
+    context:
+      repository: "{{ steps.stats.output.repository }}"

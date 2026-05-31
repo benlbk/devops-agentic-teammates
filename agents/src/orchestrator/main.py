@@ -38,6 +38,12 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         plugin_registry.load_all()
     except Exception as e:
         logger.error("plugin registry load failed", error=str(e))
+    # Discover declarative workflows (NFR-6)
+    try:
+        from workflows.registry import workflow_registry
+        workflow_registry.load_all()
+    except Exception as e:
+        logger.error("workflow registry load failed", error=str(e))
     yield
     logger.info("Shutting down Agent Orchestrator")
 
@@ -248,6 +254,45 @@ async def list_plugins() -> dict[str, Any]:
             for p in plugin_registry.plugins
         ],
     }
+
+
+@app.get("/api/workflows")
+async def list_workflows() -> dict[str, Any]:
+    """List declarative workflows (NFR-6)."""
+    from workflows.registry import workflow_registry
+    workflow_registry.load_all()
+    return {
+        "count": len(workflow_registry.workflows),
+        "workflows": [
+            {
+                "name": w.name,
+                "description": w.description,
+                "source": w.source,
+                "step_count": len(w.steps),
+                "steps": [{"name": s.name, "agent_type": s.agent_type,
+                           "task_type": s.task_type, "when": s.when}
+                          for s in w.steps],
+                "error": w.error,
+            }
+            for w in workflow_registry.workflows
+        ],
+    }
+
+
+@app.post("/api/workflows/reload")
+async def reload_workflows() -> dict[str, Any]:
+    """Re-discover workflow YAML files (NFR-6)."""
+    from workflows.registry import workflow_registry
+    workflow_registry.reload()
+    return {"count": len(workflow_registry.workflows)}
+
+
+@app.post("/api/workflows/run/{name}")
+async def run_workflow(name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Execute a declarative workflow (NFR-6)."""
+    from workflows.registry import workflow_registry
+    ctx = dict(payload.get("context") or {})
+    return await workflow_registry.run(name, ctx)
 
 
 @app.get("/api/compliance/policy")
