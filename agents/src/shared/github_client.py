@@ -296,6 +296,48 @@ class GitHubClient:
         response.raise_for_status()
         return response.json()
 
+    async def add_issue_labels(
+        self, owner: str, repo: str, issue_number: int, labels: list[str],
+    ) -> list[dict[str, Any]]:
+        """Add labels to an issue or PR (works on both — same endpoint)."""
+        headers = await self._auth_headers()
+        response = await self._http.post(
+            f"/repos/{owner}/{repo}/issues/{issue_number}/labels",
+            headers=headers,
+            json={"labels": labels},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def remove_issue_label(
+        self, owner: str, repo: str, issue_number: int, label: str,
+    ) -> None:
+        """Remove a single label from an issue/PR. 404 is treated as no-op."""
+        headers = await self._auth_headers()
+        from urllib.parse import quote
+        response = await self._http.delete(
+            f"/repos/{owner}/{repo}/issues/{issue_number}/labels/{quote(label, safe='')}",
+            headers=headers,
+        )
+        if response.status_code == 404:
+            return
+        response.raise_for_status()
+
+    async def list_check_runs(
+        self, owner: str, repo: str, ref: str,
+    ) -> dict[str, Any]:
+        """List GitHub check runs for a commit SHA or branch."""
+        headers = await self._auth_headers()
+        response = await self._http.get(
+            f"/repos/{owner}/{repo}/commits/{ref}/check-runs",
+            headers=headers,
+            params={"per_page": 100},
+        )
+        if response.status_code == 404:
+            return {"check_runs": [], "total_count": 0}
+        response.raise_for_status()
+        return response.json()
+
     async def get_pr_diff(
         self, owner: str, repo: str, pr_number: int,
     ) -> str:

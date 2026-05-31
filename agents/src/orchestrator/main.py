@@ -773,6 +773,32 @@ async def execute_agent_task(task: AgentTask) -> None:
                 await _run_generic_task(task)
 
         elif agent_type == "test-secure":
+            # FR-3.1/3.3/3.4/3.5 extensions: route advanced task_types first.
+            if (
+                "e2e" in task_type or "playwright" in task_type or "contract" in task_type
+                or "coverage" in task_type or "merge-queue" in task_type or "merge_queue" in task_type
+                or "test-optim" in task_type or "test_optim" in task_type
+                or "flaky" in task_type or "feature-flag" in task_type or "feature_flag" in task_type
+            ):
+                from agents.test_secure_ext import (
+                    run_e2e_generation, run_contract_tests, run_coverage_enforce,
+                    run_merge_queue, run_test_optimization, run_feature_flag,
+                )
+                if "e2e" in task_type or "playwright" in task_type:
+                    await run_e2e_generation(task, context)
+                elif "contract" in task_type:
+                    await run_contract_tests(task, context)
+                elif "coverage" in task_type:
+                    await run_coverage_enforce(task, context)
+                elif "merge-queue" in task_type or "merge_queue" in task_type:
+                    await run_merge_queue(task, context)
+                elif "test-optim" in task_type or "test_optim" in task_type or "flaky" in task_type:
+                    await run_test_optimization(task, context)
+                elif "feature-flag" in task_type or "feature_flag" in task_type:
+                    await run_feature_flag(task, context)
+                logger.info("test-secure ext task completed", task_id=task.task_id, task_type=task_type)
+                return
+
             from agents.test_secure import test_gen_agent, security_scan_agent
 
             pr_number = context.get("prNumber")
