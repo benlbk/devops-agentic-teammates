@@ -12,6 +12,17 @@ COPY src/ ./src/
 
 RUN poetry install --no-interaction --no-ansi --only main
 
+# Extra runtime deps not yet pinned in poetry.lock
+RUN pip install --no-cache-dir prometheus-fastapi-instrumentator==7.0.0 \
+    "setuptools<70" \
+    opentelemetry-sdk==1.27.0 \
+    opentelemetry-api==1.27.0 \
+    opentelemetry-exporter-otlp-proto-http==1.27.0 \
+    opentelemetry-instrumentation-fastapi==0.48b0 \
+    opentelemetry-instrumentation-httpx==0.48b0 \
+    opentelemetry-instrumentation-botocore==0.48b0 \
+    opentelemetry-instrumentation-logging==0.48b0
+
 FROM python:3.12-slim AS runtime
 
 RUN groupadd -r agent && useradd -r -g agent agent

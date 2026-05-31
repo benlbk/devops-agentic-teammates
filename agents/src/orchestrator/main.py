@@ -8,6 +8,11 @@ from typing import Any
 
 import structlog
 import uvicorn
+
+# Initialise OTel as early as possible so httpx/boto3 clients constructed at
+# subsequent module imports are auto-instrumented (NFR-5).
+import shared.tracing  # noqa: F401
+
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
@@ -44,6 +49,9 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         workflow_registry.load_all()
     except Exception as e:
         logger.error("workflow registry load failed", error=str(e))
+    # OpenTelemetry tracing (NFR-5) is initialized at app-construction time,
+    # below the FastAPI() call — Starlette forbids adding middleware after
+    # startup, so it cannot happen here in the lifespan.
     yield
     logger.info("Shutting down Agent Orchestrator")
 
@@ -53,6 +61,14 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# NFR-5: instrument FastAPI here (must run before app startup completes,
+# Starlette forbids adding middleware after startup).
+try:
+    from shared.tracing import init as _init_tracing
+    _init_tracing(app)
+except Exception as _e:  # pragma: no cover
+    logger.warning("tracing init failed: %s", _e)
 
 
 # ---- Prometheus metrics (best-effort instrumentation) ----
@@ -293,6 +309,41 @@ async def run_workflow(name: str, payload: dict[str, Any]) -> dict[str, Any]:
     from workflows.registry import workflow_registry
     ctx = dict(payload.get("context") or {})
     return await workflow_registry.run(name, ctx)
+
+
+@app.get("/api/tracing")
+async def tracing_info() -> dict[str, Any]:
+    """Report the live OpenTelemetry tracing configuration (NFR-5)."""
+    import os
+    info: dict[str, Any] = {
+        "service_name": os.environ.get("OTEL_SERVICE_NAME", "agent-orchestrator"),
+        "service_version": os.environ.get("OTEL_SERVICE_VERSION", "v73"),
+        "otlp_endpoint": os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "") or None,
+        "console_exporter": os.environ.get("OTEL_TRACES_CONSOLE", "").lower() in ("1", "true", "yes"),
+    }
+    try:
+        from opentelemetry import trace
+        provider = trace.get_tracer_provider()
+        info["provider"] = provider.__class__.__name__
+        info["resource"] = dict(getattr(provider, "resource", None).attributes) if getattr(provider, "resource", None) else {}
+        info["instrumented"] = []
+        for name in ("FastAPI", "HTTPXClient", "Botocore", "Logging"):
+            try:
+                mod = __import__(f"opentelemetry.instrumentation.{name.lower().replace('client','')}",
+                                 fromlist=[f"{name}Instrumentor"])
+                cls = getattr(mod, f"{name}Instrumentor", None)
+                if cls is not None and cls().is_instrumented_by_opentelemetry:
+                    info["instrumented"].append(name)
+            except Exception:
+                pass
+    except Exception as exc:
+        info["error"] = str(exc)
+    try:
+        from shared.tracing import trace_context_headers
+        info["current_context"] = trace_context_headers()
+    except Exception:
+        pass
+    return info
 
 
 @app.get("/api/compliance/policy")
@@ -790,6 +841,16 @@ async def execute_agent_task(task: AgentTask) -> None:
             AGENT_TASKS_STARTED.labels(agent_type=task.agent_type, task_type=task.task_type).inc()
         except Exception:
             pass
+    # NFR-5: per-task OpenTelemetry span. Enter manually so we don't have
+    # to reindent the giant try/except block below.
+    _span_cm = None
+    try:
+        from shared.tracing import task_span
+        _span_cm = task_span(task.agent_type, task.task_type, task.task_id,
+                             **{"agent.repository": (task.context or {}).get("repository")})
+        _span_cm.__enter__()
+    except Exception:
+        _span_cm = None
     try:
         agent_type = task.agent_type
         task_type = task.task_type
@@ -1337,6 +1398,12 @@ async def execute_agent_task(task: AgentTask) -> None:
         except Exception:
             pass
     finally:
+        # NFR-5: close OTel span (manual __exit__ — see top of function).
+        if _span_cm is not None:
+            try:
+                _span_cm.__exit__(None, None, None)
+            except Exception:
+                pass
         if AGENT_TASK_DURATION is not None:
             try:
                 AGENT_TASK_DURATION.labels(
