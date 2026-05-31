@@ -209,6 +209,49 @@ class GitHubClient:
         response.raise_for_status()
         return response.json()
 
+    async def list_pull_request_files(
+        self, owner: str, repo: str, pr_number: int, per_page: int = 100,
+    ) -> list[dict[str, Any]]:
+        """List files changed in a PR (filename, status, additions, deletions)."""
+        headers = await self._auth_headers()
+        response = await self._http.get(
+            f"/repos/{owner}/{repo}/pulls/{pr_number}/files",
+            headers=headers,
+            params={"per_page": per_page},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def list_directory(
+        self, owner: str, repo: str, path: str, ref: str = "main",
+    ) -> list[dict[str, Any]]:
+        """List files in a directory. Returns [] if path missing."""
+        headers = await self._auth_headers()
+        response = await self._http.get(
+            f"/repos/{owner}/{repo}/contents/{path}",
+            params={"ref": ref},
+            headers=headers,
+        )
+        if response.status_code == 404:
+            return []
+        response.raise_for_status()
+        data = response.json()
+        return data if isinstance(data, list) else []
+
+    async def list_pulls(
+        self, owner: str, repo: str, state: str = "closed",
+        per_page: int = 50, base: str = "main",
+    ) -> list[dict[str, Any]]:
+        """List pull requests (most recent first)."""
+        headers = await self._auth_headers()
+        response = await self._http.get(
+            f"/repos/{owner}/{repo}/pulls",
+            headers=headers,
+            params={"state": state, "per_page": per_page, "base": base, "sort": "updated", "direction": "desc"},
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def get_pr_diff(
         self, owner: str, repo: str, pr_number: int,
     ) -> str:
@@ -346,6 +389,70 @@ class GitHubClient:
         )
         response.raise_for_status()
         return response.json()
+
+    async def get_latest_release(
+        self, owner: str, repo: str,
+    ) -> dict[str, Any] | None:
+        """Get the latest published release, or None if the repo has no releases."""
+        headers = await self._auth_headers()
+        response = await self._http.get(
+            f"/repos/{owner}/{repo}/releases/latest",
+            headers=headers,
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
+
+    # ---- Webhook Operations ----
+
+    async def create_webhook(
+        self, owner: str, repo: str, webhook_url: str,
+        secret: str = "", events: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Create a webhook on a repository."""
+        headers = await self._auth_headers()
+        if events is None:
+            events = [
+                "push", "pull_request", "issues", "issue_comment",
+                "check_run", "workflow_run", "release",
+            ]
+        config: dict[str, Any] = {
+            "url": webhook_url,
+            "content_type": "json",
+        }
+        if secret:
+            config["secret"] = secret
+        response = await self._http.post(
+            f"/repos/{owner}/{repo}/hooks",
+            headers=headers,
+            json={"name": "web", "active": True, "events": events, "config": config},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def list_webhooks(
+        self, owner: str, repo: str,
+    ) -> list[dict[str, Any]]:
+        """List webhooks on a repository."""
+        headers = await self._auth_headers()
+        response = await self._http.get(
+            f"/repos/{owner}/{repo}/hooks",
+            headers=headers,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_webhook(
+        self, owner: str, repo: str, hook_id: int,
+    ) -> None:
+        """Delete a webhook from a repository."""
+        headers = await self._auth_headers()
+        response = await self._http.delete(
+            f"/repos/{owner}/{repo}/hooks/{hook_id}",
+            headers=headers,
+        )
+        response.raise_for_status()
 
     # ---- Workflow Operations ----
 
