@@ -7,14 +7,14 @@ As a backend developer
 Create Circuit Breaker Configuration Model
 
 ## User Story
-As a backend developer, I want to create a configuration model so that I can make circuit breaker parameters configurable
+As a backend developer, I want to create a configuration model so that I can store and manage circuit breaker parameters
 
 ## Acceptance Criteria
-- [ ] Configuration model includes failure threshold parameter
-- [ ] Configuration model includes reset timeout parameter
-- [ ] Configuration model includes backoff settings
-- [ ] Validation logic for configuration parameters
-- [ ] Default values are provided
+- [ ] Model includes fields for failure threshold, reset timeout, and backoff parameters
+- [ ] Model has appropriate data types and constraints
+- [ ] Default values are defined for all parameters
+- [ ] Model can be serialized to/from JSON
+- [ ] Unit tests verify model behavior
 
 ## Details
 - **Priority:** P1
@@ -32,45 +32,27 @@ As a backend developer, I want to create a configuration model so that I can mak
 - **Priority:** P1
 - **Story Points:** 3
 - **Acceptance Criteria:**
-  - [ ] Model includes fields for failure threshold, reset timeout, and backoff parameters
-  - [ ] Model has appropriate data types and constraints
-  - [ ] Default values are defined for all parameters
-  - [ ] Model can be serialized to/from JSON
-  - [ ] Unit tests verify model behavior
+  - [ ] Model includes failureThreshold field with integer type and validation
+  - [ ] Model includes resetTimeout field with duration type and validation
+  - [ ] Model includes backoffMultiplier field with float type and validation
+  - [ ] Model includes maxBackoffDuration field with duration type
+  - [ ] All fields have appropriate default values defined
+  - [ ] Model can be serialized to JSON format
+  - [ ] Model can be deserialized from JSON format
+  - [ ] Input validation ensures values are within acceptable ranges
 
-### Implement Configuration Validation Service
-- **Story:** As a backend developer, I want to validate circuit breaker configuration parameters so that only valid values are stored
-- **Priority:** P1
-- **Story Points:** 3
-- **Acceptance Criteria:**
-  - [ ] Validate failure threshold is positive integer
-  - [ ] Validate reset timeout is positive integer
-  - [ ] Validate backoff parameters are within acceptable ranges
-  - [ ] Return validation errors for invalid parameters
-  - [ ] Unit tests cover validation logic
-
-### Create Database Migration for Circuit Breaker Config
-- **Story:** As a backend developer, I want to create database tables for circuit breaker configuration so that settings can be persisted
+### Implement Circuit Breaker Config Unit Tests
+- **Story:** As a backend developer, I want to create comprehensive unit tests for the circuit breaker configuration so that I can verify its behavior
 - **Priority:** P1
 - **Story Points:** 2
 - **Acceptance Criteria:**
-  - [ ] Create migration script for config table
-  - [ ] Define appropriate column types and constraints
-  - [ ] Include rollback script
-  - [ ] Seed default configuration values
-  - [ ] Migration can be executed and rolled back successfully
-
-### Implement Configuration REST API Endpoints
-- **Story:** As a backend developer, I want REST API endpoints to manage circuit breaker configuration so that settings can be retrieved and updated
-- **Priority:** P1
-- **Story Points:** 5
-- **Acceptance Criteria:**
-  - [ ] Implement GET /api/circuit-breaker/config endpoint
-  - [ ] Implement PUT /api/circuit-breaker/config endpoint
-  - [ ] Validate request payload
-  - [ ] Return appropriate error responses
-  - [ ] Add API documentation
-  - [ ] Write integration tests
+  - [ ] Test creation with default values
+  - [ ] Test creation with custom values
+  - [ ] Test validation of invalid parameters
+  - [ ] Test JSON serialization
+  - [ ] Test JSON deserialization
+  - [ ] Test edge cases for all parameters
+  - [ ] Achieve >90% test coverage
 
 
 ## Non-Functional Requirements
