@@ -835,6 +835,32 @@ async def execute_agent_task(task: AgentTask) -> None:
                 await _run_generic_task(task)
 
         elif agent_type == "release-deploy":
+            # FR-4.1/4.2/4.3/4.4 extension dispatch (must come before legacy graphs)
+            tt = task_type.lower()
+            if any(k in tt for k in (
+                "cost-guard", "cost_guard",
+                "argo-rollout", "argo_rollout", "rollout-canary",
+                "tf-module", "tf_module", "terraform-module",
+                "rightsize", "right-size", "right_size",
+                "release-notes", "release_notes",
+            )):
+                from agents.release_deploy_ext import (
+                    run_ephemeral_cost_guard, run_argo_rollout,
+                    run_tf_module_generate, run_rightsize_report, run_release_notes,
+                )
+                if "cost-guard" in tt or "cost_guard" in tt:
+                    await run_ephemeral_cost_guard(task, context)
+                elif "argo-rollout" in tt or "argo_rollout" in tt or "rollout-canary" in tt:
+                    await run_argo_rollout(task, context)
+                elif "tf-module" in tt or "tf_module" in tt or "terraform-module" in tt:
+                    await run_tf_module_generate(task, context)
+                elif "rightsize" in tt or "right-size" in tt or "right_size" in tt:
+                    await run_rightsize_report(task, context)
+                elif "release-notes" in tt or "release_notes" in tt:
+                    await run_release_notes(task, context)
+                logger.info("release-deploy ext task completed", task_id=task.task_id, task_type=task_type)
+                return
+
             from agents.release_deploy import (
                 build_release_graph, build_deploy_graph,
                 build_ephemeral_graph, build_tf_review_graph,

@@ -338,6 +338,21 @@ class GitHubClient:
         response.raise_for_status()
         return response.json()
 
+    async def compare_commits(
+        self, owner: str, repo: str, base: str, head: str,
+    ) -> dict[str, Any]:
+        """Compare two refs; returns {commits, files, ahead_by, behind_by, ...}."""
+        headers = await self._auth_headers()
+        response = await self._http.get(
+            f"/repos/{owner}/{repo}/compare/{base}...{head}",
+            headers=headers,
+            params={"per_page": 250},
+        )
+        if response.status_code == 404:
+            return {"commits": [], "files": [], "ahead_by": 0, "behind_by": 0}
+        response.raise_for_status()
+        return response.json()
+
     async def get_pr_diff(
         self, owner: str, repo: str, pr_number: int,
     ) -> str:
