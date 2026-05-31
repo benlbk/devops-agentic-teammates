@@ -1,24 +1,24 @@
 # Requirements: Implement Metric Formatter Utility
 
 ## User Story
-As a developer, I want a metri
+As a developer, I want to crea
 
 ## Overview
 Implement Metric Formatter Utility
 
 ## User Story
-As a developer, I want a metric formatter utility so that I can display metric values with appropriate units
+As a developer, I want to create a metric formatting utility so that metrics are displayed in a consistent and readable format
 
 ## Acceptance Criteria
-- [ ] Supports formatting for latency values (ms)
-- [ ] Supports formatting for percentage values (%)
-- [ ] Handles decimal places appropriately
+- [ ] Handles numeric metrics with appropriate decimal places
+- [ ] Formats percentage values correctly
+- [ ] Supports different unit types (bytes, time, etc)
 - [ ] Handles edge cases (null, undefined, NaN)
 - [ ] Provides documentation for supported formats
 
 ## Details
 - **Priority:** P1
-- **Story Points:** 2
+- **Story Points:** 3
 - **Dependencies:** 
 
 ---
@@ -28,48 +28,59 @@ As a developer, I want a metric formatter utility so that I can display metric v
 ## User Stories
 
 ### Create Base Metric Formatter Class
-- **Story:** As a developer, I want a base metric formatter class so that I can standardize metric value formatting across the application
+- **Story:** As a developer, I want a base metric formatter class so that I can implement consistent metric formatting across the application
 - **Priority:** P1
 - **Story Points:** 3
 - **Acceptance Criteria:**
-  - [ ] Create MetricFormatter base class
-  - [ ] Implement common formatting utilities
+  - [ ] Create MetricFormatter base class with core interfaces
+  - [ ] Implement error handling for invalid inputs
+  - [ ] Add input validation methods
   - [ ] Handle null/undefined/NaN cases
-  - [ ] Add input validation
-  - [ ] Include basic documentation
+  - [ ] Include basic unit tests
 
-### Implement Latency Value Formatter
-- **Story:** As a developer, I want to format latency values with millisecond units so that metrics are displayed consistently
+### Implement Number Formatter
+- **Story:** As a developer, I want to format numeric values with appropriate decimal places so that numbers are consistently displayed
 - **Priority:** P1
 - **Story Points:** 2
 - **Acceptance Criteria:**
-  - [ ] Create LatencyFormatter extending base class
-  - [ ] Format values with 'ms' suffix
-  - [ ] Handle sub-millisecond values
-  - [ ] Round to appropriate decimal places
-  - [ ] Add unit tests for edge cases
+  - [ ] Format numbers with configurable decimal places
+  - [ ] Support thousand separators
+  - [ ] Handle negative numbers
+  - [ ] Round numbers according to specified rules
+  - [ ] Add unit tests for number formatting
 
 ### Implement Percentage Formatter
-- **Story:** As a developer, I want to format percentage values so that metrics show the correct % representation
-- **Priority:** P1
+- **Story:** As a developer, I want to format percentage values so that they are displayed with the correct symbol and decimal places
+- **Priority:** P2
 - **Story Points:** 2
 - **Acceptance Criteria:**
-  - [ ] Create PercentageFormatter extending base class
-  - [ ] Format values with '%' suffix
-  - [ ] Handle decimal percentages
-  - [ ] Validate input range (0-100)
-  - [ ] Add unit tests
+  - [ ] Format percentages with % symbol
+  - [ ] Support decimal precision configuration
+  - [ ] Handle values greater than 100%
+  - [ ] Convert decimal values to percentages
+  - [ ] Add unit tests for percentage formatting
 
-### Add Formatter Documentation
-- **Story:** As a developer, I want comprehensive documentation for the metric formatters so that I can properly implement them in my code
+### Implement Unit Formatter
+- **Story:** As a developer, I want to format values with different units so that metrics are displayed with appropriate unit notation
 - **Priority:** P2
-- **Story Points:** 1
+- **Story Points:** 3
 - **Acceptance Criteria:**
-  - [ ] Document all public methods
+  - [ ] Support byte units (KB, MB, GB)
+  - [ ] Support time units (ms, s, min)
+  - [ ] Auto-select appropriate unit scale
+  - [ ] Allow custom unit definitions
+  - [ ] Add unit tests for unit formatting
+
+### Create Formatter Documentation
+- **Story:** As a developer, I want documentation for the metric formatter so that I can understand how to use all formatting options
+- **Priority:** P2
+- **Story Points:** 2
+- **Acceptance Criteria:**
+  - [ ] Document all supported format types
   - [ ] Provide usage examples
-  - [ ] Document supported formats
-  - [ ] Include edge case handling
-  - [ ] Add JSDoc comments
+  - [ ] Include API documentation
+  - [ ] Add troubleshooting guide
+  - [ ] Include code samples
 
 
 ## Non-Functional Requirements
