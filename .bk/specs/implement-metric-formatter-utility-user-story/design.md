@@ -1,17 +1,19 @@
 # Design: Implement Metric Formatter Utility
 
 ## User Story
-As a developer, I want a metri
+As a developer, I want to crea
 
 ## Architecture
 
 ### Components
-- **MetricFormatter** (component): Utility class for formatting different types of metric values
-- **LatencyFormatter** (component): Specialized formatter for latency values in milliseconds
-- **PercentageFormatter** (component): Specialized formatter for percentage values
+- **MetricFormatter** (component): Utility class for formatting different types of metrics
+- **NumberFormatter** (component): Handles numeric value formatting with decimal places
+- **UnitFormatter** (component): Handles unit-specific formatting (bytes, time)
+- **PercentageFormatter** (component): Handles percentage value formatting
 
 
 ### API Contracts
+- `GET /api/docs/metric-formatter` — Returns documentation for supported metric formats
 
 
 ### Data Flow
