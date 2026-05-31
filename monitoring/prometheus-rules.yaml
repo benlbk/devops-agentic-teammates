@@ -1,0 +1,72 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: agent-orchestrator
+  namespace: agents
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: agent-tasks
+      interval: 30s
+      rules:
+        - alert: AgentTaskHighFailureRatio
+          expr: |
+            sum(rate(agent_tasks_completed_total{status="failed"}[10m]))
+              /
+            clamp_min(sum(rate(agent_tasks_completed_total[10m])), 0.0001)
+              > 0.20
+          for: 10m
+          labels:
+            severity: warning
+            component: agent-orchestrator
+          annotations:
+            summary: "Agent task failure ratio > 20% (10m)"
+            description: "{{ $value | humanizePercentage }} of agent tasks failed over the last 10 minutes."
+
+        - alert: AgentTaskDurationP95High
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (task_type, le) (rate(agent_task_duration_seconds_bucket[15m]))
+            ) > 300
+          for: 15m
+          labels:
+            severity: warning
+            component: agent-orchestrator
+          annotations:
+            summary: "Agent task p95 duration > 5m for {{ $labels.task_type }}"
+            description: "p95 = {{ $value }}s over 15m for task_type={{ $labels.task_type }}."
+
+        - alert: AgentOrchestratorDown
+          expr: |
+            absent(up{job="agent-orchestrator"} == 1)
+          for: 5m
+          labels:
+            severity: critical
+            component: agent-orchestrator
+          annotations:
+            summary: "Agent orchestrator /metrics scrape down"
+            description: "No healthy agent-orchestrator targets for 5m."
+
+        - alert: AgentOrchestratorPodCrashLooping
+          expr: |
+            rate(kube_pod_container_status_restarts_total{namespace="agents", pod=~"orchestrator.*"}[15m]) > 0
+          for: 15m
+          labels:
+            severity: warning
+            component: agent-orchestrator
+          annotations:
+            summary: "Orchestrator pod restarting ({{ $labels.pod }})"
+            description: "Pod {{ $labels.pod }} restarted in the last 15m."
+
+        - alert: AgentLLMTokenBurnHigh
+          expr: |
+            sum(rate(agent_llm_tokens_total[1h])) > 50000
+          for: 30m
+          labels:
+            severity: warning
+            component: agent-orchestrator
+          annotations:
+            summary: "LLM token burn > 50k tokens/sec rolling 1h"
+            description: "Sustained high LLM token consumption — check for runaway agents."

@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cost-snapshot
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: cost-snapshot
+    app.kubernetes.io/part-of: agent-orchestrator
+spec:
+  # 17:00 UTC = 01:00 SGT, after the daily AWS billing rollover
+  schedule: "0 17 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: trigger
+              image: curlimages/curl:8.10.1
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  BODY='{"agent_type":"operate-monitor","task_type":"cost-optimization","context":{"scope":"all","period":"last-7-days"}}'
+                  echo "POST $ORCH_URL/api/tasks"
+                  curl -fsS -X POST -H 'Content-Type: application/json' \
+                    -d "$BODY" \
+                    "$ORCH_URL/api/tasks"
+              env:
+                - name: ORCH_URL
+                  value: "http://orchestrator-agent-orchestrator.agents.svc.cluster.local"
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  cpu: 100m
+                  memory: 64Mi

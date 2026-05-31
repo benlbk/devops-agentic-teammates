@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from shared.config import settings
 from shared.events import event_publisher
 from shared.policy import PolicyDecision, policy_engine
-from shared.state import AgentTask, TaskStatus, state_manager
+from shared.state import AgentTask, Project, TaskStatus, state_manager
 
 logger = structlog.get_logger()
 
@@ -41,6 +41,46 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+# ---- Prometheus metrics (best-effort instrumentation) ----
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator  # type: ignore[import-not-found]
+
+    Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+    logger.info("Prometheus /metrics endpoint mounted")
+except ImportError:
+    logger.warning("prometheus_fastapi_instrumentator not installed; /metrics disabled")
+
+try:
+    from prometheus_client import Counter, Histogram  # type: ignore[import-not-found]
+
+    AGENT_TASKS_STARTED = Counter(
+        "agent_tasks_started_total",
+        "Agent tasks started",
+        ["agent_type", "task_type"],
+    )
+    AGENT_TASKS_COMPLETED = Counter(
+        "agent_tasks_completed_total",
+        "Agent tasks completed (terminal status)",
+        ["agent_type", "task_type", "status"],
+    )
+    AGENT_TASK_DURATION = Histogram(
+        "agent_task_duration_seconds",
+        "Agent task wall-clock duration",
+        ["agent_type", "task_type"],
+        buckets=(1, 5, 10, 30, 60, 120, 300, 600, 1800),
+    )
+    AGENT_LLM_TOKENS = Counter(
+        "agent_llm_tokens_total",
+        "Estimated LLM tokens consumed by agent tasks",
+        ["agent_type", "task_type"],
+    )
+except ImportError:
+    AGENT_TASKS_STARTED = None  # type: ignore[assignment]
+    AGENT_TASKS_COMPLETED = None  # type: ignore[assignment]
+    AGENT_TASK_DURATION = None  # type: ignore[assignment]
+    AGENT_LLM_TOKENS = None  # type: ignore[assignment]
 
 
 # ---- Health & Info ----
@@ -161,6 +201,52 @@ async def get_tasks_by_repo(owner: str, repo: str) -> list[dict[str, Any]]:
     """Get all tasks for a repository."""
     tasks = await state_manager.get_tasks_by_repository(f"{owner}/{repo}")
     return [t.model_dump() for t in tasks]
+
+
+@app.get("/api/reviews")
+async def list_terraform_reviews(repository: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    """List terraform-review tasks, optionally filtered by repository."""
+    if repository:
+        tasks = await state_manager.get_tasks_by_repository(repository)
+    else:
+        # Fall back to completed status (TF reviews always complete)
+        tasks = await state_manager.get_tasks_by_status(TaskStatus.COMPLETED)
+    reviews = [
+        {
+            "task_id": t.task_id,
+            "repository": t.context.get("repository", ""),
+            "pr_number": t.context.get("prNumber") or t.context.get("pr_number"),
+            "risk_level": (t.output_data or {}).get("risk_level", "UNKNOWN"),
+            "review_summary": (t.output_data or {}).get("review_summary", ""),
+            "pr_comment_url": (t.output_data or {}).get("pr_comment_url", ""),
+            "created_at": t.created_at,
+            "completed_at": t.completed_at,
+            "status": t.status.value if hasattr(t.status, "value") else str(t.status),
+        }
+        for t in tasks
+        if t.task_type == "terraform-review"
+    ]
+    reviews.sort(key=lambda r: r["created_at"], reverse=True)
+    return reviews[:limit]
+
+
+@app.get("/api/github/{owner}/{repo}/latest-release")
+async def get_github_latest_release(owner: str, repo: str) -> dict[str, Any]:
+    """Return the latest release tag for a repo (helper for the Pipeline UI)."""
+    from shared.github_client import github_client
+    try:
+        latest = await github_client.get_latest_release(owner=owner, repo=repo)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"GitHub API error: {e}") from e
+    if not latest:
+        return {"tag_name": "", "version": "0.0.0", "html_url": "", "exists": False}
+    tag = latest.get("tag_name", "")
+    return {
+        "tag_name": tag,
+        "version": tag.lstrip("v") if tag else "0.0.0",
+        "html_url": latest.get("html_url", ""),
+        "exists": True,
+    }
 
 
 # ---- Approval Handling ----
@@ -461,6 +547,19 @@ Context:
 
 async def execute_agent_task(task: AgentTask) -> None:
     """Execute an agent workflow in-process (EKS deployment mode)."""
+    import time as _time
+    _start_ts = _time.monotonic()
+    _tokens_before = 0
+    try:
+        from shared.llm import llm_provider as _llm
+        _tokens_before = int(getattr(_llm, "tokens_used", 0) or 0)
+    except Exception:
+        pass
+    if AGENT_TASKS_STARTED is not None:
+        try:
+            AGENT_TASKS_STARTED.labels(agent_type=task.agent_type, task_type=task.task_type).inc()
+        except Exception:
+            pass
     try:
         agent_type = task.agent_type
         task_type = task.task_type
@@ -796,7 +895,11 @@ async def execute_agent_task(task: AgentTask) -> None:
                     "messages": [],
                     "task": task,
                     "repository": repository,
-                    "cost_data": context.get("costData", {}),
+                    "cost_data": {
+                        "scope": context.get("scope", "all"),
+                        "period": context.get("period", "last-30-days"),
+                        **(context.get("costData") or {}),
+                    },
                     "recommendations": [],
                     "savings_estimate": 0.0,
                     "report": "",
@@ -831,6 +934,33 @@ async def execute_agent_task(task: AgentTask) -> None:
             await state_manager.update_task(task)
         except Exception:
             pass
+    finally:
+        if AGENT_TASK_DURATION is not None:
+            try:
+                AGENT_TASK_DURATION.labels(
+                    agent_type=task.agent_type, task_type=task.task_type
+                ).observe(_time.monotonic() - _start_ts)
+            except Exception:
+                pass
+        if AGENT_TASKS_COMPLETED is not None:
+            try:
+                AGENT_TASKS_COMPLETED.labels(
+                    agent_type=task.agent_type,
+                    task_type=task.task_type,
+                    status=getattr(task.status, "value", str(task.status)),
+                ).inc()
+            except Exception:
+                pass
+        if AGENT_LLM_TOKENS is not None:
+            try:
+                from shared.llm import llm_provider as _llm2
+                _delta = max(0, int(getattr(_llm2, "tokens_used", 0) or 0) - _tokens_before)
+                if _delta > 0:
+                    AGENT_LLM_TOKENS.labels(
+                        agent_type=task.agent_type, task_type=task.task_type
+                    ).inc(_delta)
+            except Exception:
+                pass
 
 
 @app.post("/webhooks/github")
@@ -1681,6 +1811,283 @@ async def performance_metrics(hours: int = 168) -> dict[str, Any]:
         "task_types": task_type_summary,
         "timeline": timeline,
     }
+
+
+# ---- Project Management API ----
+
+
+class ProjectCreate(BaseModel):
+    name: str
+    description: str = ""
+    repository: str
+    repositories: list[str] = []
+    default_branch: str = "main"
+    environments: dict[str, Any] = {}
+    config: dict[str, Any] = {}
+    created_by: str = ""
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    repository: str | None = None
+    repositories: list[str] | None = None
+    default_branch: str | None = None
+    environments: dict[str, Any] | None = None
+    config: dict[str, Any] | None = None
+
+
+@app.post("/api/projects")
+async def create_project(body: ProjectCreate) -> dict[str, Any]:
+    """Create a new project."""
+    # Auto-populate repositories list with primary repo if not provided
+    repos = body.repositories if body.repositories else [body.repository]
+    if body.repository not in repos:
+        repos.insert(0, body.repository)
+    project = Project(
+        name=body.name,
+        description=body.description,
+        repository=body.repository,
+        repositories=repos,
+        default_branch=body.default_branch,
+        environments=body.environments,
+        config=body.config,
+        created_by=body.created_by,
+    )
+    created = await state_manager.create_project(project)
+    return {"project": created.model_dump()}
+
+
+@app.get("/api/projects")
+async def list_projects() -> dict[str, Any]:
+    """List all projects."""
+    projects = await state_manager.list_projects()
+    return {"projects": [p.model_dump() for p in projects]}
+
+
+@app.get("/api/projects/{project_id}")
+async def get_project(project_id: str) -> dict[str, Any]:
+    """Get a project by ID."""
+    project = await state_manager.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"project": project.model_dump()}
+
+
+@app.put("/api/projects/{project_id}")
+async def update_project(project_id: str, body: ProjectUpdate) -> dict[str, Any]:
+    """Update an existing project."""
+    project = await state_manager.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if body.name is not None:
+        project.name = body.name
+    if body.description is not None:
+        project.description = body.description
+    if body.repository is not None:
+        project.repository = body.repository
+    if body.repositories is not None:
+        project.repositories = body.repositories
+    if body.default_branch is not None:
+        project.default_branch = body.default_branch
+    if body.environments is not None:
+        project.environments = body.environments
+    if body.config is not None:
+        project.config = body.config
+
+    updated = await state_manager.update_project(project)
+    return {"project": updated.model_dump()}
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: str) -> dict[str, str]:
+    """Delete a project."""
+    project = await state_manager.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    await state_manager.delete_project(project_id)
+    return {"status": "deleted"}
+
+
+# ---- Project Repository Management ----
+
+class RepoAddRequest(BaseModel):
+    repository: str  # e.g. "owner/repo"
+
+
+@app.post("/api/projects/{project_id}/repos")
+async def add_project_repo(project_id: str, body: RepoAddRequest) -> dict[str, Any]:
+    """Add a repository to the project."""
+    project = await state_manager.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Ensure primary repo is in list (backward compat for pre-multi-repo projects)
+    if not project.repositories and project.repository:
+        project.repositories = [project.repository]
+
+    repo = body.repository.strip()
+    if "/" not in repo:
+        raise HTTPException(status_code=400, detail="Invalid repository format. Use owner/repo")
+    if repo in project.repositories:
+        raise HTTPException(status_code=409, detail="Repository already added to this project")
+
+    project.repositories.append(repo)
+    await state_manager.update_project(project)
+    return {"status": "added", "repositories": project.repositories}
+
+
+@app.delete("/api/projects/{project_id}/repos/{owner}/{repo}")
+async def remove_project_repo(project_id: str, owner: str, repo: str) -> dict[str, Any]:
+    """Remove a repository from the project (also removes its webhook)."""
+    from shared.github_client import github_client
+
+    project = await state_manager.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    full_repo = f"{owner}/{repo}"
+    if full_repo not in project.repositories:
+        raise HTTPException(status_code=404, detail="Repository not found in this project")
+    if full_repo == project.repository and len(project.repositories) <= 1:
+        raise HTTPException(status_code=400, detail="Cannot remove the primary repository")
+
+    # Remove webhook if registered
+    webhooks = project.config.get("webhooks", {})
+    hook_id = webhooks.get(full_repo)
+    if hook_id:
+        try:
+            await github_client.delete_webhook(owner, repo, int(hook_id))
+        except Exception as e:
+            logger.warning("Failed to delete webhook during repo removal", error=str(e))
+        webhooks.pop(full_repo, None)
+        project.config["webhooks"] = webhooks
+
+    project.repositories.remove(full_repo)
+    # If removing primary, update primary to first remaining
+    if full_repo == project.repository and project.repositories:
+        project.repository = project.repositories[0]
+    await state_manager.update_project(project)
+    return {"status": "removed", "repositories": project.repositories}
+
+
+# ---- Project Webhook Registration (multi-repo) ----
+
+@app.post("/api/projects/{project_id}/webhook")
+async def register_project_webhook(project_id: str, body: RepoAddRequest | None = None) -> dict[str, Any]:
+    """Register a GitHub webhook for a specific repo (or the primary repo)."""
+    from shared.github_client import github_client
+
+    project = await state_manager.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Determine target repo
+    target_repo = body.repository.strip() if body and body.repository else project.repository
+    if "/" not in target_repo:
+        raise HTTPException(status_code=400, detail="Invalid repository format. Use owner/repo")
+
+    owner, repo_name = target_repo.split("/", 1)
+    webhook_url = f"https://devops.13.215.130.82.nip.io/orchestrator/webhooks/github"
+    secret = settings.github_webhook_secret or ""
+
+    # Check if webhook already registered for this repo
+    webhooks = project.config.get("webhooks", {})
+    # Migrate legacy webhook_id into webhooks dict
+    if not webhooks and project.config.get("webhook_id"):
+        webhooks = {project.repository: project.config["webhook_id"]}
+    if target_repo in webhooks:
+        raise HTTPException(status_code=409, detail=f"Webhook already registered for {target_repo}")
+
+    try:
+        # Auto-create repo if it doesn't exist on GitHub
+        await github_client.ensure_repository(owner=owner, repo=repo_name)
+
+        hook = await github_client.create_webhook(
+            owner=owner,
+            repo=repo_name,
+            webhook_url=webhook_url,
+            secret=secret,
+        )
+        webhooks[target_repo] = hook["id"]
+        project.config["webhooks"] = webhooks
+        # Backward compat: keep legacy fields for primary repo
+        if target_repo == project.repository:
+            project.config["webhook_id"] = hook["id"]
+            project.config["webhook_active"] = True
+        await state_manager.update_project(project)
+        return {"status": "registered", "webhook_id": hook["id"], "webhook_url": webhook_url, "repository": target_repo}
+    except Exception as e:
+        logger.error("Failed to register webhook", error=str(e), repo=target_repo)
+        raise HTTPException(status_code=500, detail=f"Failed to register webhook: {str(e)}")
+
+
+@app.get("/api/projects/{project_id}/webhook")
+async def get_project_webhook(project_id: str) -> dict[str, Any]:
+    """Get webhook status for all repos in the project."""
+    project = await state_manager.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    webhooks = project.config.get("webhooks", {})
+
+    # Backward compat: if no webhooks dict but legacy webhook_id exists, migrate
+    if not webhooks and project.config.get("webhook_id"):
+        webhooks = {project.repository: project.config["webhook_id"]}
+
+    repo_statuses = []
+    all_repos = project.repositories if project.repositories else [project.repository]
+    # Ensure primary repo always appears
+    if project.repository and project.repository not in all_repos:
+        all_repos = [project.repository] + all_repos
+    for repo in all_repos:
+        hook_id = webhooks.get(repo)
+        repo_statuses.append({
+            "repository": repo,
+            "registered": hook_id is not None,
+            "webhook_id": hook_id,
+        })
+
+    return {"repositories": repo_statuses}
+
+
+@app.delete("/api/projects/{project_id}/webhook")
+async def remove_project_webhook(project_id: str, body: RepoAddRequest | None = None) -> dict[str, str]:
+    """Remove the webhook from a specific repo (or the primary repo)."""
+    from shared.github_client import github_client
+
+    project = await state_manager.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    target_repo = body.repository.strip() if body and body.repository else project.repository
+    if "/" not in target_repo:
+        raise HTTPException(status_code=400, detail="Invalid repository format")
+
+    webhooks = project.config.get("webhooks", {})
+    # Backward compat
+    if not webhooks and project.config.get("webhook_id"):
+        webhooks = {project.repository: project.config["webhook_id"]}
+
+    hook_id = webhooks.get(target_repo)
+    if not hook_id:
+        raise HTTPException(status_code=404, detail=f"No webhook registered for {target_repo}")
+
+    owner, repo_name = target_repo.split("/", 1)
+    try:
+        await github_client.delete_webhook(owner, repo_name, int(hook_id))
+    except Exception as e:
+        logger.warning("Failed to delete webhook from GitHub (may already be removed)", error=str(e))
+
+    webhooks.pop(target_repo, None)
+    project.config["webhooks"] = webhooks
+    # Clear legacy fields if primary
+    if target_repo == project.repository:
+        project.config.pop("webhook_id", None)
+        project.config.pop("webhook_active", None)
+    await state_manager.update_project(project)
+    return {"status": "removed"}
 
 
 def main() -> None:
