@@ -29,8 +29,10 @@ data:
         jsonData:
           authType: default
           defaultRegion: ap-southeast-1
+          # CloudWatch Container Insights log groups (populated by Fluent Bit DaemonSet
+          # in ns amazon-cloudwatch). `application` contains all pod stdout/stderr.
           logGroups:
-            - name: /aws/eks/mies-eks/agents
-            - name: /aws/eks/mies-eks/dashboard
-            - name: /aws/eks/mies-eks/monitoring
+            - name: /aws/containerinsights/mies-eks/application
+            - name: /aws/containerinsights/mies-eks/dataplane
+            - name: /aws/containerinsights/mies-eks/host
         editable: true
