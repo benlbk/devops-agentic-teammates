@@ -1,7 +1,7 @@
 # Implementation Tasks: Implement Metric Formatter Utility
 
 ## User Story
-As a developer, I want a metri
+As a developer, I want to crea
 
 ## Task Breakdown
 
@@ -11,7 +11,7 @@ As a developer, I want a metri
 - **Dependencies:** None
 - **Completion Criteria:** All acceptance criteria met, tests passing
 
-### Task 2: Implement Latency Value Formatter
+### Task 2: Implement Number Formatter
 - **Size:** S
 - **Priority:** P1
 - **Dependencies:** Create Base Metric Formatter Class
@@ -19,14 +19,20 @@ As a developer, I want a metri
 
 ### Task 3: Implement Percentage Formatter
 - **Size:** S
-- **Priority:** P1
+- **Priority:** P2
 - **Dependencies:** Create Base Metric Formatter Class
 - **Completion Criteria:** All acceptance criteria met, tests passing
 
-### Task 4: Add Formatter Documentation
+### Task 4: Implement Unit Formatter
+- **Size:** M
+- **Priority:** P2
+- **Dependencies:** Create Base Metric Formatter Class
+- **Completion Criteria:** All acceptance criteria met, tests passing
+
+### Task 5: Create Formatter Documentation
 - **Size:** S
 - **Priority:** P2
-- **Dependencies:** Create Base Metric Formatter Class, Implement Latency Value Formatter, Implement Percentage Formatter
+- **Dependencies:** Create Base Metric Formatter Class, Implement Number Formatter, Implement Percentage Formatter, Implement Unit Formatter
 - **Completion Criteria:** All acceptance criteria met, tests passing
 
 
