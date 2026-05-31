@@ -759,6 +759,16 @@ async def execute_agent_task(task: AgentTask) -> None:
                 await code_gen_agent.ainvoke(initial_state)
                 logger.info("Code generation completed", task_id=task.task_id)
 
+            elif "dependency" in task_type or "deps" in task_type:
+                from agents.dep_build import run_dependency_update
+                await run_dependency_update(task, context)
+                logger.info("Dependency update completed", task_id=task.task_id)
+
+            elif "build-optim" in task_type or "build_optim" in task_type or "ci-optim" in task_type:
+                from agents.dep_build import run_build_optimization
+                await run_build_optimization(task, context)
+                logger.info("Build optimization completed", task_id=task.task_id)
+
             else:
                 await _run_generic_task(task)
 

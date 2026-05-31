@@ -252,6 +252,50 @@ class GitHubClient:
         response.raise_for_status()
         return response.json()
 
+    async def list_workflows(
+        self, owner: str, repo: str, per_page: int = 30,
+    ) -> dict[str, Any]:
+        """List repository workflows."""
+        headers = await self._auth_headers()
+        response = await self._http.get(
+            f"/repos/{owner}/{repo}/actions/workflows",
+            headers=headers,
+            params={"per_page": per_page},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def list_workflow_runs(
+        self, owner: str, repo: str, workflow_id: str | int | None = None,
+        status: str | None = None, per_page: int = 50,
+    ) -> dict[str, Any]:
+        """List workflow runs for a repo or a specific workflow."""
+        headers = await self._auth_headers()
+        path = (
+            f"/repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs"
+            if workflow_id is not None
+            else f"/repos/{owner}/{repo}/actions/runs"
+        )
+        params: dict[str, Any] = {"per_page": per_page}
+        if status:
+            params["status"] = status
+        response = await self._http.get(path, headers=headers, params=params)
+        response.raise_for_status()
+        return response.json()
+
+    async def list_workflow_run_jobs(
+        self, owner: str, repo: str, run_id: int, per_page: int = 30,
+    ) -> dict[str, Any]:
+        """List jobs (and step timings) for a workflow run."""
+        headers = await self._auth_headers()
+        response = await self._http.get(
+            f"/repos/{owner}/{repo}/actions/runs/{run_id}/jobs",
+            headers=headers,
+            params={"per_page": per_page},
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def get_pr_diff(
         self, owner: str, repo: str, pr_number: int,
     ) -> str:
