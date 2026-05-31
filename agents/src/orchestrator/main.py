@@ -32,6 +32,12 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     if policy_path.exists():
         policy_engine.load_from_file(policy_path)
         logger.info("Loaded policies from file", path=str(policy_path))
+    # Discover plugins (NFR-6)
+    try:
+        from plugins.registry import plugin_registry
+        plugin_registry.load_all()
+    except Exception as e:
+        logger.error("plugin registry load failed", error=str(e))
     yield
     logger.info("Shutting down Agent Orchestrator")
 
@@ -220,6 +226,28 @@ async def get_audit_log(agent_type: str, limit: int = 200) -> dict[str, Any]:
 async def verify_audit_log(agent_type: str, limit: int = 1000) -> dict[str, Any]:
     """Replay the hash chain and report any tampering (NFR-2)."""
     return await state_manager.verify_audit_chain(agent_type, limit=limit)
+
+
+@app.get("/api/plugins")
+async def list_plugins() -> dict[str, Any]:
+    """List loaded plugins and their registered handlers (NFR-6)."""
+    from plugins.registry import plugin_registry
+    plugin_registry.load_all()
+    return {
+        "plugin_count": len(plugin_registry.plugins),
+        "handler_count": plugin_registry.handler_count,
+        "plugins": [
+            {
+                "name": p.name, "version": p.version,
+                "description": p.description, "author": p.author,
+                "module_path": p.module_path,
+                "handler_count": p.handler_count,
+                "handlers": p.handlers,
+                "error": p.error,
+            }
+            for p in plugin_registry.plugins
+        ],
+    }
 
 
 @app.get("/api/reviews")
@@ -665,6 +693,21 @@ async def execute_agent_task(task: AgentTask) -> None:
         agent_type = task.agent_type
         task_type = task.task_type
         context = task.context
+
+        # NFR-6: plugin dispatch — give user plugins first chance at the task.
+        try:
+            from plugins.registry import plugin_registry
+            plugin_registry.load_all()
+            ph = plugin_registry.resolve(agent_type, task_type)
+        except Exception as _e:
+            ph = None
+            logger.error("plugin resolve failed", error=str(_e))
+        if ph is not None:
+            logger.info("plugin handling task",
+                        plugin=ph.plugin_name, agent_type=agent_type,
+                        task_type=task_type, task_id=task.task_id)
+            await ph.function(task, context)
+            return
 
         if agent_type == "code-build":
             from agents.code_build import code_review_agent, code_gen_agent
