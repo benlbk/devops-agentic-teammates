@@ -209,6 +209,19 @@ async def get_tasks_by_repo(owner: str, repo: str) -> list[dict[str, Any]]:
     return [t.model_dump() for t in tasks]
 
 
+@app.get("/api/audit/{agent_type}")
+async def get_audit_log(agent_type: str, limit: int = 200) -> dict[str, Any]:
+    """Return the immutable, hash-chained audit log for an agent (NFR-2)."""
+    entries = await state_manager.list_audit_entries(agent_type, limit=limit)
+    return {"agent_type": agent_type, "count": len(entries), "entries": entries}
+
+
+@app.post("/api/audit/{agent_type}/verify")
+async def verify_audit_log(agent_type: str, limit: int = 1000) -> dict[str, Any]:
+    """Replay the hash chain and report any tampering (NFR-2)."""
+    return await state_manager.verify_audit_chain(agent_type, limit=limit)
+
+
 @app.get("/api/reviews")
 async def list_terraform_reviews(repository: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
     """List terraform-review tasks, optionally filtered by repository."""
