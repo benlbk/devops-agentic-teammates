@@ -27,12 +27,16 @@ data:
         spike_limit_mib: 50
 
     exporters:
-      # Visible in `kubectl logs` for the collector pod. Replace/augment with
-      # tempo / jaeger / xray when a backend exists.
+      # Visible in `kubectl logs` for the collector pod.
       debug:
-        verbosity: detailed
-        sampling_initial: 5
-        sampling_thereafter: 50
+        verbosity: normal
+        sampling_initial: 2
+        sampling_thereafter: 200
+      # Forward to Jaeger all-in-one for a queryable UI at /jaeger.
+      otlp/jaeger:
+        endpoint: jaeger-collector.monitoring.svc.cluster.local:4317
+        tls:
+          insecure: true
 
     service:
       telemetry:
@@ -42,7 +46,7 @@ data:
         traces:
           receivers: [otlp]
           processors: [memory_limiter, batch]
-          exporters: [debug]
+          exporters: [debug, otlp/jaeger]
 
 ---
 apiVersion: apps/v1
