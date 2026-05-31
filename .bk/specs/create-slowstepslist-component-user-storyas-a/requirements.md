@@ -14,11 +14,12 @@ As a developer, I want to create a list component to display slow steps so that 
 - [ ] Steps are sorted by duration in descending order
 - [ ] Duration is formatted appropriately
 - [ ] List follows design system styling
-- [ ] List is accessible
+- [ ] List is accessible with proper ARIA attributes
+- [ ] List handles empty state gracefully
 
 ## Details
 - **Priority:** P1
-- **Story Points:** 2
+- **Story Points:** 3
 - **Dependencies:** Implement SlowStepsSection Container
 
 ---
@@ -27,38 +28,40 @@ As a developer, I want to create a list component to display slow steps so that 
 
 ## User Stories
 
-### Create SlowStepsList Component
-- **Story:** As a developer, I want to create a list component to display slow steps so that users can view performance bottlenecks
+### Create SlowStepsList Container Component
+- **Story:** As a developer, I want to create a container list component for slow steps so that I can manage the list's data and layout
 - **Priority:** P1
 - **Story Points:** 3
 - **Acceptance Criteria:**
-  - [ ] List displays step name and duration
+  - [ ] Component accepts array of step data as props
   - [ ] Steps are sorted by duration in descending order
-  - [ ] Duration is formatted appropriately
-  - [ ] List follows design system styling
-  - [ ] List is accessible with proper ARIA attributes
-  - [ ] List handles empty state gracefully
+  - [ ] Implements proper list semantics with ul/ol element
+  - [ ] Handles empty state with appropriate message
+  - [ ] Follows design system spacing and layout
+  - [ ] Has proper ARIA role='list' attribute
 
 ### Create SlowStepsListItem Component
-- **Story:** As a developer, I want to create a reusable list item component to display individual slow steps so that the main list component remains clean and maintainable
+- **Story:** As a developer, I want to create a reusable list item component so that I can consistently display step details
 - **Priority:** P1
 - **Story Points:** 2
 - **Acceptance Criteria:**
   - [ ] Displays step name clearly
-  - [ ] Shows formatted duration
-  - [ ] Follows design system typography and spacing
-  - [ ] Implements hover and focus states
-  - [ ] Is keyboard accessible
+  - [ ] Shows formatted duration value
+  - [ ] Follows design system typography and colors
+  - [ ] Implements proper list item semantics
+  - [ ] Has appropriate hover/focus states
+  - [ ] Includes proper ARIA attributes
 
 ### Implement Duration Formatting
-- **Story:** As a developer, I want to implement duration formatting utilities so that step durations are displayed in a consistent and readable format
+- **Story:** As a developer, I want to create a duration formatting utility so that step durations are displayed in a user-friendly format
 - **Priority:** P2
 - **Story Points:** 1
 - **Acceptance Criteria:**
-  - [ ] Formats milliseconds into appropriate units (ms, s)
+  - [ ] Converts milliseconds to appropriate units (ms, s, min)
+  - [ ] Handles different duration ranges appropriately
+  - [ ] Includes proper unit labels
+  - [ ] Rounds to appropriate decimal places
   - [ ] Handles edge cases (zero, very large numbers)
-  - [ ] Includes unit labels
-  - [ ] Is reusable across components
 
 
 ## Non-Functional Requirements
