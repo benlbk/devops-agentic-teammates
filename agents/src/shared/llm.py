@@ -40,6 +40,34 @@ class TokenBudgetExceeded(Exception):
     """Raised when the token budget is exhausted."""
 
 
+def _sanitize_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """NFR-2: strip secrets + PII from prompts before they leave the process.
+
+    Lazy-imports compliance to avoid pulling boto3 at module import time.
+    Best-effort: failures fall back to the original messages (logged).
+    """
+    try:
+        from shared.compliance import redact
+    except Exception:
+        return messages
+    out: list[BaseMessage] = []
+    for m in messages:
+        content = getattr(m, "content", None)
+        if isinstance(content, str) and content:
+            r = redact(content)
+            if r.findings:
+                try:
+                    m = m.model_copy(update={"content": r.redacted})  # type: ignore[attr-defined]
+                except Exception:
+                    m.content = r.redacted  # type: ignore[assignment]
+                logger.warning(
+                    "llm prompt redacted: %d finding(s), class=%s",
+                    len(r.findings), r.highest_class.value,
+                )
+        out.append(m)
+    return out
+
+
 class LLMProvider:
     """Provider-agnostic LLM client with model routing, token budgets, and fallback."""
 
@@ -125,6 +153,7 @@ class LLMProvider:
     ) -> BaseMessage:
         """Invoke LLM with automatic fallback on failure."""
         self._check_budget()
+        messages = _sanitize_messages(messages)
 
         try:
             response = await self.primary.ainvoke(messages, **kwargs)
@@ -151,6 +180,7 @@ class LLMProvider:
     ) -> BaseMessage:
         """Synchronous invoke with automatic fallback."""
         self._check_budget()
+        messages = _sanitize_messages(messages)
 
         try:
             response = self.primary.invoke(messages, **kwargs)

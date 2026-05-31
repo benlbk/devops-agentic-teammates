@@ -250,6 +250,62 @@ async def list_plugins() -> dict[str, Any]:
     }
 
 
+@app.get("/api/compliance/policy")
+async def compliance_policy() -> dict[str, Any]:
+    """SOC2/GDPR data-class retention + redaction policy (NFR-2)."""
+    from shared.compliance import RETENTION_DAYS, _PATTERNS
+    return {
+        "retention_days": {k.value: v for k, v in RETENTION_DAYS.items()},
+        "detectors": [{"kind": k, "data_class": c.value} for k, c, _ in _PATTERNS],
+        "controls": {
+            "audit_log_immutability": "SHA-256 hash chain (NFR-2)",
+            "redaction": "Applied to all classified data before storage / LLM prompts",
+            "right_to_erasure": "POST /api/compliance/erase/{subject_id}",
+            "encryption_at_rest": "DynamoDB AWS-managed KMS (default)",
+            "encryption_in_transit": "TLS 1.2+ for all AWS / GitHub APIs",
+        },
+    }
+
+
+@app.post("/api/compliance/classify")
+async def compliance_classify(payload: dict[str, Any]) -> dict[str, Any]:
+    """Classify text into PUBLIC/INTERNAL/CONFIDENTIAL/PII."""
+    from shared.compliance import classify
+    text = str(payload.get("text", ""))
+    return {"data_class": classify(text).value, "length": len(text)}
+
+
+@app.post("/api/compliance/redact")
+async def compliance_redact(payload: dict[str, Any]) -> dict[str, Any]:
+    """Redact secrets + PII from text; returns sanitized text + findings."""
+    from shared.compliance import redact
+    text = str(payload.get("text", ""))
+    r = redact(text)
+    return {
+        "redacted": r.redacted,
+        "highest_class": r.highest_class.value,
+        "findings": [
+            {"kind": f.kind, "data_class": f.data_class.value,
+             "start": f.start, "end": f.end, "sample": f.sample}
+            for f in r.findings
+        ],
+    }
+
+
+@app.post("/api/compliance/erase/{subject_id}")
+async def compliance_erase(subject_id: str, requested_by: str = "api") -> dict[str, Any]:
+    """GDPR Art. 17 right-to-erasure (NFR-2)."""
+    from shared.compliance import compliance_manager
+    return await compliance_manager.erase_subject(subject_id, requested_by=requested_by)
+
+
+@app.post("/api/compliance/retention/sweep")
+async def compliance_retention_sweep(dry_run: bool = True) -> dict[str, Any]:
+    """SOC2 retention sweep — dry-run by default."""
+    from shared.compliance import compliance_manager
+    return await compliance_manager.retention_sweep(dry_run=dry_run)
+
+
 @app.get("/api/reviews")
 async def list_terraform_reviews(repository: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
     """List terraform-review tasks, optionally filtered by repository."""
