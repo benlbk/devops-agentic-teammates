@@ -549,10 +549,9 @@ async def execute_agent_task(task: AgentTask) -> None:
     """Execute an agent workflow in-process (EKS deployment mode)."""
     import time as _time
     _start_ts = _time.monotonic()
-    _tokens_before = 0
     try:
-        from shared.llm import llm_provider as _llm
-        _tokens_before = int(getattr(_llm, "tokens_used", 0) or 0)
+        from shared.llm import start_task_token_tracking
+        start_task_token_tracking()
     except Exception:
         pass
     if AGENT_TASKS_STARTED is not None:
@@ -953,8 +952,8 @@ async def execute_agent_task(task: AgentTask) -> None:
                 pass
         if AGENT_LLM_TOKENS is not None:
             try:
-                from shared.llm import llm_provider as _llm2
-                _delta = max(0, int(getattr(_llm2, "tokens_used", 0) or 0) - _tokens_before)
+                from shared.llm import get_task_tokens
+                _delta = get_task_tokens()
                 if _delta > 0:
                     AGENT_LLM_TOKENS.labels(
                         agent_type=task.agent_type, task_type=task.task_type

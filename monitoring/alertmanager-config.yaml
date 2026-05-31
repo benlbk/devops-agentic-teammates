@@ -1,0 +1,76 @@
+# Enable Alertmanager + route agent-orchestrator alerts to Slack.
+#
+# Two-step apply:
+#   1) Enable Alertmanager in kube-prometheus-stack:
+#        helm upgrade prometheus prometheus-community/kube-prometheus-stack \
+#          -n monitoring --reuse-values --set alertmanager.enabled=true
+#      Wait for `prometheus-kube-prometheus-alertmanager-0` to be Ready.
+#   2) Replace SLACK_WEBHOOK_URL in the Secret below with a real
+#      https://hooks.slack.com/services/... URL, then:
+#        kubectl apply -f monitoring/alertmanager-config.yaml
+#
+# Route key: alertname=~"Agent.*" → slack-agents receiver.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: slack-webhook
+  namespace: monitoring
+type: Opaque
+stringData:
+  url: "https://hooks.slack.com/services/REPLACE/ME/WITH_REAL_WEBHOOK"
+---
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: agent-orchestrator
+  namespace: monitoring
+  labels:
+    # Must match alertmanagerConfigSelector on the Alertmanager CR
+    # (kube-prometheus-stack default: release=<helm-release-name>)
+    release: prometheus
+spec:
+  route:
+    receiver: slack-agents
+    groupBy: ["alertname", "severity"]
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h
+    matchers:
+      - name: alertname
+        matchType: "=~"
+        value: "Agent.*"
+    routes:
+      - receiver: slack-agents-critical
+        matchers:
+          - name: severity
+            value: critical
+        groupWait: 10s
+        repeatInterval: 1h
+  receivers:
+    - name: slack-agents
+      slackConfigs:
+        - apiURL:
+            name: slack-webhook
+            key: url
+          channel: "#agent-alerts"
+          sendResolved: true
+          title: '{{ template "slack.title" . }}'
+          text: |
+            *Alert:* {{ .CommonLabels.alertname }}
+            *Severity:* {{ .CommonLabels.severity }}
+            *Summary:* {{ .CommonAnnotations.summary }}
+            *Description:* {{ .CommonAnnotations.description }}
+    - name: slack-agents-critical
+      slackConfigs:
+        - apiURL:
+            name: slack-webhook
+            key: url
+          channel: "#agent-alerts"
+          sendResolved: true
+          color: danger
+          title: ":rotating_light: CRITICAL: {{ .CommonLabels.alertname }}"
+          text: |
+            *Severity:* {{ .CommonLabels.severity }}
+            *Summary:* {{ .CommonAnnotations.summary }}
+            *Description:* {{ .CommonAnnotations.description }}

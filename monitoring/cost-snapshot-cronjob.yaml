@@ -28,12 +28,16 @@ spec:
                   set -eu
                   BODY='{"agent_type":"operate-monitor","task_type":"cost-optimization","context":{"scope":"all","period":"last-7-days"}}'
                   echo "POST $ORCH_URL/api/tasks"
-                  curl -fsS -X POST -H 'Content-Type: application/json' \
+                  # --max-time 30: orchestrator returns task_id within ~1s; longer means
+                  # the endpoint is misbehaving and we should fail fast (CronJob will retry).
+                  curl -fsS --max-time 30 -X POST -H 'Content-Type: application/json' \
                     -d "$BODY" \
                     "$ORCH_URL/api/tasks"
+                  echo ""
+                  echo "done"
               env:
                 - name: ORCH_URL
-                  value: "http://orchestrator-agent-orchestrator.agents.svc.cluster.local"
+                  value: "http://orchestrator-agent-orchestrator.agents.svc.cluster.local:8000"
               resources:
                 requests:
                   cpu: 10m

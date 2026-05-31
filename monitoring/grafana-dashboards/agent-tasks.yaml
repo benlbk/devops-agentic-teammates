@@ -1,0 +1,110 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-agent-tasks
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  agent-tasks.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "panels": [
+        {
+          "title": "Tasks Started (rate, by agent)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "targets": [{"expr": "sum by (agent_type) (rate(agent_tasks_started_total[5m]))", "legendFormat": "{{agent_type}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Tasks Completed (rate, by status)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+          "targets": [{"expr": "sum by (status) (rate(agent_tasks_completed_total[5m]))", "legendFormat": "{{status}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Failure Ratio (5m)",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 8},
+          "targets": [{"expr": "sum(rate(agent_tasks_completed_total{status=\"failed\"}[5m])) / clamp_min(sum(rate(agent_tasks_completed_total[5m])), 0.0001)"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "percentunit", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.05}, {"color": "red", "value": 0.2}]}}}
+        },
+        {
+          "title": "Tasks In-Flight",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 6, "y": 8},
+          "targets": [{"expr": "sum(agent_tasks_started_total) - sum(agent_tasks_completed_total)"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Task Duration P95 (by task_type)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "targets": [{"expr": "histogram_quantile(0.95, sum by (task_type, le) (rate(agent_task_duration_seconds_bucket[10m])))", "legendFormat": "{{task_type}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "s"}}
+        },
+        {
+          "title": "HTTP Request Rate (by handler)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+          "targets": [{"expr": "sum by (handler) (rate(http_requests_total{job=\"agent-orchestrator\"}[5m]))", "legendFormat": "{{handler}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "HTTP Latency P95 (by handler)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+          "targets": [{"expr": "histogram_quantile(0.95, sum by (handler, le) (rate(http_request_duration_seconds_bucket{job=\"agent-orchestrator\"}[5m])))", "legendFormat": "{{handler}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "s"}}
+        },
+        {
+          "title": "HTTP 5xx Rate",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
+          "targets": [{"expr": "sum(rate(http_requests_total{job=\"agent-orchestrator\", status=~\"5..\"}[5m]))", "legendFormat": "5xx/sec"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Tasks Completed Totals (by agent × status)",
+          "type": "bargauge",
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 28},
+          "targets": [{"expr": "sum by (agent_type, status) (increase(agent_tasks_completed_total[1h]))", "legendFormat": "{{agent_type}} / {{status}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "LLM Token Rate (per hour, by agent)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 36},
+          "targets": [{"expr": "sum by (agent_type) (rate(agent_llm_tokens_total[15m])) * 3600", "legendFormat": "{{agent_type}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "short"}}
+        },
+        {
+          "title": "Estimated $ Burn (1h, blended $6/1M)",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 12, "y": 36},
+          "targets": [{"expr": "sum(rate(agent_llm_tokens_total[1h])) * 3600 * 0.000006"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "currencyUSD", "decimals": 4, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.5}, {"color": "red", "value": 2}]}}}
+        },
+        {
+          "title": "Estimated $ Burn (24h, by agent)",
+          "type": "bargauge",
+          "gridPos": {"h": 8, "w": 6, "x": 18, "y": 36},
+          "targets": [{"expr": "sum by (agent_type) (increase(agent_llm_tokens_total[24h])) * 0.000006", "legendFormat": "{{agent_type}}"}],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "currencyUSD", "decimals": 3}}
+        }
+      ],
+      "schemaVersion": 39,
+      "tags": ["agents", "tasks"],
+      "time": {"from": "now-6h", "to": "now"},
+      "title": "Agent Tasks",
+      "uid": "agent-tasks"
+    }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -12,6 +13,21 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from shared.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Per-task token accumulator (asyncio-task-scoped). Holds a mutable [int] so increments
+# inside the same context propagate without resetting the ContextVar each time.
+_task_tokens: ContextVar[list[int] | None] = ContextVar("task_tokens", default=None)
+
+
+def start_task_token_tracking() -> None:
+    """Begin per-task token accounting for the current asyncio context."""
+    _task_tokens.set([0])
+
+
+def get_task_tokens() -> int:
+    """Return tokens consumed since start_task_token_tracking() in this context."""
+    v = _task_tokens.get()
+    return v[0] if v else 0
 
 
 class TokenBudgetExceeded(Exception):
@@ -63,7 +79,11 @@ class LLMProvider:
     def _track_usage(self, response: Any) -> None:
         usage = getattr(response, "usage_metadata", None)
         if usage and isinstance(usage, dict):
-            self._tokens_used += usage.get("total_tokens", 0)
+            delta = usage.get("total_tokens", 0)
+            self._tokens_used += delta
+            v = _task_tokens.get()
+            if v is not None:
+                v[0] += delta
 
     @retry(
         stop=stop_after_attempt(3),
