@@ -14,20 +14,26 @@ from shared.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Per-task token accumulator (asyncio-task-scoped). Holds a mutable [int] so increments
-# inside the same context propagate without resetting the ContextVar each time.
-_task_tokens: ContextVar[list[int] | None] = ContextVar("task_tokens", default=None)
+# Per-task token accumulator (asyncio-task-scoped). Stores a mutable dict so increments
+# inside the same context propagate. Shape: {"_total": int, "by_model": {model_id: int}}.
+_task_tokens: ContextVar[dict | None] = ContextVar("task_tokens", default=None)
 
 
 def start_task_token_tracking() -> None:
     """Begin per-task token accounting for the current asyncio context."""
-    _task_tokens.set([0])
+    _task_tokens.set({"_total": 0, "by_model": {}})
 
 
 def get_task_tokens() -> int:
-    """Return tokens consumed since start_task_token_tracking() in this context."""
+    """Return total tokens consumed since start_task_token_tracking() in this context."""
     v = _task_tokens.get()
-    return v[0] if v else 0
+    return v["_total"] if v else 0
+
+
+def get_task_tokens_by_model() -> dict[str, int]:
+    """Return per-model token usage for the current task context."""
+    v = _task_tokens.get()
+    return dict(v["by_model"]) if v else {}
 
 
 class TokenBudgetExceeded(Exception):
@@ -86,14 +92,26 @@ class LLMProvider:
                 f"Process token budget exceeded: {self._tokens_used}/{settings.llm_token_budget}"
             )
 
-    def _track_usage(self, response: Any) -> None:
+    @staticmethod
+    def _model_id_of(response: Any, fallback: str) -> str:
+        meta = getattr(response, "response_metadata", None) or {}
+        return (
+            meta.get("model_id")
+            or meta.get("model_name")
+            or meta.get("model")
+            or fallback
+        )
+
+    def _track_usage(self, response: Any, model_id: str = "unknown") -> None:
         usage = getattr(response, "usage_metadata", None)
         if usage and isinstance(usage, dict):
             delta = usage.get("total_tokens", 0)
             self._tokens_used += delta
             v = _task_tokens.get()
             if v is not None:
-                v[0] += delta
+                v["_total"] += delta
+                mid = self._model_id_of(response, model_id)
+                v["by_model"][mid] = v["by_model"].get(mid, 0) + delta
 
     @retry(
         stop=stop_after_attempt(3),
@@ -110,7 +128,7 @@ class LLMProvider:
 
         try:
             response = await self.primary.ainvoke(messages, **kwargs)
-            self._track_usage(response)
+            self._track_usage(response, model_id=settings.bedrock_model_id)
             return response
         except Exception as e:
             logger.warning("Primary LLM (Bedrock) failed: %s, trying fallback", e)
@@ -118,7 +136,7 @@ class LLMProvider:
                 raise
 
             response = await self.fallback.ainvoke(messages, **kwargs)
-            self._track_usage(response)
+            self._track_usage(response, model_id=settings.openai_model)
             return response
 
     @retry(
@@ -136,7 +154,7 @@ class LLMProvider:
 
         try:
             response = self.primary.invoke(messages, **kwargs)
-            self._track_usage(response)
+            self._track_usage(response, model_id=settings.bedrock_model_id)
             return response
         except Exception as e:
             logger.warning("Primary LLM (Bedrock) failed: %s, trying fallback", e)
@@ -144,7 +162,7 @@ class LLMProvider:
                 raise
 
             response = self.fallback.invoke(messages, **kwargs)
-            self._track_usage(response)
+            self._track_usage(response, model_id=settings.openai_model)
             return response
 
     def get_model_with_tools(self, tools: list[Any]) -> BaseChatModel:

@@ -47,3 +47,19 @@ spec:
         # In-flight tasks (started - completed)
         - record: agent:tasks_in_flight
           expr: sum(agent_tasks_started_total) - sum(agent_tasks_completed_total)
+
+        # Per-model token rate (1h)
+        - record: agent:tokens_by_model:rate1h
+          expr: sum by (model) (rate(agent_llm_tokens_by_model_total[1h]))
+
+        # Per-model $/sec using model-specific Bedrock blended price (input+output midpoint).
+        # Prices in $/1M tokens. Update when AWS price changes. Unknown models default to $6/1M.
+        - record: agent:cost_usd_by_model:rate1h
+          expr: |
+            sum by (model) (rate(agent_llm_tokens_by_model_total{model=~".*claude.*sonnet.*"}[1h])) * 0.000009
+            or
+            sum by (model) (rate(agent_llm_tokens_by_model_total{model=~".*claude.*haiku.*"}[1h])) * 0.0000008
+            or
+            sum by (model) (rate(agent_llm_tokens_by_model_total{model=~".*gpt-4.*"}[1h])) * 0.00001
+            or
+            sum by (model) (rate(agent_llm_tokens_by_model_total{model!~".*claude.*|.*gpt-4.*"}[1h])) * 0.000006

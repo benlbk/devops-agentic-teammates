@@ -1,0 +1,36 @@
+# Grafana CloudWatch Logs datasource (sidecar-loaded).
+#
+# Prerequisites — NOT yet in place; this ConfigMap will load but queries will fail until:
+#   1. Fluent Bit (or aws-for-fluent-bit) DaemonSet deployed in `amazon-cloudwatch` ns
+#      to ship pod logs to CloudWatch Log Group /aws/eks/mies-eks/agents.
+#      Quickstart:
+#        kubectl apply -f https://raw.githubusercontent.com/aws-samples/amazon-cloudwatch-container-insights/latest/k8s-deployment-manifest-templates/deployment-mode/daemonset/container-insights-monitoring/quickstart/cwagent-fluent-bit-quickstart.yaml
+#   2. IRSA on the `prometheus-grafana` ServiceAccount with policy
+#      arn:aws:iam::aws:policy/CloudWatchLogsReadOnlyAccess. Approximate steps:
+#        eksctl create iamserviceaccount --cluster mies-eks --namespace monitoring \
+#          --name prometheus-grafana --attach-policy-arn arn:aws:iam::aws:policy/CloudWatchLogsReadOnlyAccess \
+#          --approve --override-existing-serviceaccounts
+#        kubectl rollout restart deployment/prometheus-grafana -n monitoring
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasource-cloudwatch
+  namespace: monitoring
+  labels:
+    grafana_datasource: "1"
+data:
+  cloudwatch.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: CloudWatch Logs
+        type: cloudwatch
+        uid: cloudwatch
+        access: proxy
+        jsonData:
+          authType: default
+          defaultRegion: ap-southeast-1
+          logGroups:
+            - name: /aws/eks/mies-eks/agents
+            - name: /aws/eks/mies-eks/dashboard
+            - name: /aws/eks/mies-eks/monitoring
+        editable: true

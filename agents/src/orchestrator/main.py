@@ -76,11 +76,17 @@ try:
         "Estimated LLM tokens consumed by agent tasks",
         ["agent_type", "task_type"],
     )
+    AGENT_LLM_TOKENS_BY_MODEL = Counter(
+        "agent_llm_tokens_by_model_total",
+        "Estimated LLM tokens consumed by agent tasks, broken down by model",
+        ["agent_type", "task_type", "model"],
+    )
 except ImportError:
     AGENT_TASKS_STARTED = None  # type: ignore[assignment]
     AGENT_TASKS_COMPLETED = None  # type: ignore[assignment]
     AGENT_TASK_DURATION = None  # type: ignore[assignment]
     AGENT_LLM_TOKENS = None  # type: ignore[assignment]
+    AGENT_LLM_TOKENS_BY_MODEL = None  # type: ignore[assignment]
 
 
 # ---- Health & Info ----
@@ -952,12 +958,20 @@ async def execute_agent_task(task: AgentTask) -> None:
                 pass
         if AGENT_LLM_TOKENS is not None:
             try:
-                from shared.llm import get_task_tokens
+                from shared.llm import get_task_tokens, get_task_tokens_by_model
                 _delta = get_task_tokens()
                 if _delta > 0:
                     AGENT_LLM_TOKENS.labels(
                         agent_type=task.agent_type, task_type=task.task_type
                     ).inc(_delta)
+                if AGENT_LLM_TOKENS_BY_MODEL is not None:
+                    for _model, _n in get_task_tokens_by_model().items():
+                        if _n > 0:
+                            AGENT_LLM_TOKENS_BY_MODEL.labels(
+                                agent_type=task.agent_type,
+                                task_type=task.task_type,
+                                model=_model,
+                            ).inc(_n)
             except Exception:
                 pass
 
