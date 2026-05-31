@@ -48,6 +48,7 @@ jobs:
           fi
 
       - name: Build & push
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: agents/
@@ -56,6 +57,15 @@ jobs:
             ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ steps.tag.outputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Trivy scan (HIGH,CRITICAL)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ steps.tag.outputs.tag }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '0'  # report-only for now; flip to '1' to gate
 
       - name: Summary
         run: |
