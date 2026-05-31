@@ -71,9 +71,19 @@ class LLMProvider:
         return self._fallback
 
     def _check_budget(self, estimated_tokens: int = 1000) -> None:
+        # Per-task cap: prevents one runaway task from burning the whole process budget.
+        # Default to 1/4 of process budget; configurable via settings.llm_task_token_budget if set.
+        per_task_cap = getattr(settings, "llm_task_token_budget", 0) or max(
+            10_000, settings.llm_token_budget // 4
+        )
+        task_used = get_task_tokens()
+        if task_used + estimated_tokens > per_task_cap:
+            raise TokenBudgetExceeded(
+                f"Per-task token budget exceeded: {task_used}/{per_task_cap}"
+            )
         if self._tokens_used + estimated_tokens > settings.llm_token_budget:
             raise TokenBudgetExceeded(
-                f"Token budget exceeded: {self._tokens_used}/{settings.llm_token_budget}"
+                f"Process token budget exceeded: {self._tokens_used}/{settings.llm_token_budget}"
             )
 
     def _track_usage(self, response: Any) -> None:

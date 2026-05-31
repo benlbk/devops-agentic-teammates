@@ -1,0 +1,49 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: agent-orchestrator-recording
+  namespace: agents
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: agent-orchestrator-recording
+      interval: 30s
+      rules:
+        # Token throughput per agent_type (tokens/sec, smoothed over 15m)
+        - record: agent:tokens:rate15m
+          expr: sum by (agent_type) (rate(agent_llm_tokens_total[15m]))
+
+        # Hourly token throughput, used by burn-rate panels/alerts
+        - record: agent:tokens:rate1h
+          expr: sum by (agent_type) (rate(agent_llm_tokens_total[1h]))
+
+        # Estimated USD burn rate ($/sec) using blended $6 / 1M tokens
+        - record: agent:cost_usd:rate1h
+          expr: sum by (agent_type) (rate(agent_llm_tokens_total[1h])) * 0.000006
+
+        # Failure ratio over 5m, clamped to avoid divide-by-zero
+        - record: agent:task_failure_ratio:5m
+          expr: |
+            sum(rate(agent_tasks_completed_total{status="failed"}[5m]))
+            /
+            clamp_min(sum(rate(agent_tasks_completed_total[5m])), 0.0001)
+
+        # Failure ratio per agent_type
+        - record: agent:task_failure_ratio_by_agent:5m
+          expr: |
+            sum by (agent_type) (rate(agent_tasks_completed_total{status="failed"}[5m]))
+            /
+            clamp_min(sum by (agent_type) (rate(agent_tasks_completed_total[5m])), 0.0001)
+
+        # P95 task duration per task_type (15m window)
+        - record: agent:task_duration:p95_15m
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (task_type, le) (rate(agent_task_duration_seconds_bucket[15m]))
+            )
+
+        # In-flight tasks (started - completed)
+        - record: agent:tasks_in_flight
+          expr: sum(agent_tasks_started_total) - sum(agent_tasks_completed_total)
