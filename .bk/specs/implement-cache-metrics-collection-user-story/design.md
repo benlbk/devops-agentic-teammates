@@ -1,19 +1,19 @@
 # Design: Implement Cache Metrics Collection
 
 ## User Story
-As a system architect, I want 
+As a backend developer, I want
 
 ## Architecture
 
 ### Components
-- **CacheMetricsCollector** (service): Service responsible for collecting and aggregating cache performance metrics
-- **CacheMetricsController** (component): Controller handling cache metrics API endpoints
-- **CacheMetricsRepository** (component): Repository for storing and retrieving cache metrics data
+- **CacheMetricsCollector** (service): Service to collect and track cache performance metrics
+- **PrometheusExporter** (service): Service to export metrics in Prometheus format
+- **MetricsController** (component): Controller to expose metrics endpoint
 
 
 ### API Contracts
-- `GET /api/cache/status` — Retrieve current cache performance metrics
-- `GET /api/cache/metrics/history` — Retrieve historical cache metrics
+- `GET /api/metrics/cache` — Get current cache metrics
+- `GET /metrics` — Prometheus metrics endpoint
 
 
 ### Data Flow
