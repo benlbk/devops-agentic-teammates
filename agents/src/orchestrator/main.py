@@ -1088,6 +1088,32 @@ async def execute_agent_task(task: AgentTask) -> None:
                 await _run_generic_task(task)
 
         elif agent_type == "operate-monitor":
+            # FR-5.1/5.2/5.3/5.4 extension dispatch
+            tt = task_type.lower()
+            if any(k in tt for k in (
+                "incident-correlate", "incident_correlate", "alert-correlate",
+                "runbook",
+                "slo-report", "slo_report",
+                "hpa-pdb", "hpa_pdb", "pdb-tune",
+                "dora-snapshot", "dora_snapshot", "dora-report",
+            )):
+                from agents.operate_monitor_ext import (
+                    run_incident_correlate, run_runbook_execute,
+                    run_slo_report, run_hpa_pdb_tune, run_dora_snapshot,
+                )
+                if "incident-correlate" in tt or "incident_correlate" in tt or "alert-correlate" in tt:
+                    await run_incident_correlate(task, context)
+                elif "runbook" in tt:
+                    await run_runbook_execute(task, context)
+                elif "slo-report" in tt or "slo_report" in tt:
+                    await run_slo_report(task, context)
+                elif "hpa-pdb" in tt or "hpa_pdb" in tt or "pdb-tune" in tt:
+                    await run_hpa_pdb_tune(task, context)
+                elif "dora-snapshot" in tt or "dora_snapshot" in tt or "dora-report" in tt:
+                    await run_dora_snapshot(task, context)
+                logger.info("operate-monitor ext task completed", task_id=task.task_id, task_type=task_type)
+                return
+
             from agents.operate_monitor import (
                 incident_agent, cost_analysis_agent, build_performance_graph,
             )

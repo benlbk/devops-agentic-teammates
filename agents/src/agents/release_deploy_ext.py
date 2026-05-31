@@ -69,7 +69,7 @@ async def _open_pr(
     labels: list[str] | None = None,
 ) -> dict[str, Any] | None:
     try:
-        await github_client.create_branch(owner=owner, repo=repo, branch_name=branch, base_branch=base)
+        await github_client.create_branch(owner=owner, repo=repo, branch=branch, from_ref=base)
         for f in files:
             await github_client.create_or_update_file(
                 owner=owner, repo=repo, path=f["path"], content=f["content"],

@@ -76,7 +76,7 @@ async def _open_pr(
 ) -> dict[str, Any] | None:
     """Create a branch from base, commit files, open PR."""
     try:
-        await github_client.create_branch(owner=owner, repo=repo, branch_name=branch, base_branch=base)
+        await github_client.create_branch(owner=owner, repo=repo, branch=branch, from_ref=base)
         for f in files:
             await github_client.create_or_update_file(
                 owner=owner, repo=repo, path=f["path"], content=f["content"],
